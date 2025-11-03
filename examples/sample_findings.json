@@ -1,0 +1,39 @@
+{
+  "context": {
+    "event_name": "pull_request",
+    "repo": "owner/repo",
+    "sha": "xyz789uvw012",
+    "ref": "refs/pull/1/merge",
+    "actor": "developer",
+    "is_pull_request": true,
+    "pull_number": 1,
+    "base_ref": "main",
+    "head_ref": "feature-branch",
+    "base_sha": "abc123def456",
+    "head_sha": "xyz789uvw012"
+  },
+  "findings": [
+    {
+      "file": "src/main.py",
+      "line": 2,
+      "severity": "HIGH",
+      "message": "Variable 'total' initialized to None instead of 0. This will cause TypeError when trying to add numbers.",
+      "suggestion": "Change 'total = None' to 'total = 0'"
+    },
+    {
+      "file": "src/main.py",
+      "line": 8,
+      "severity": "CRITICAL",
+      "message": "Division by zero error. The divide function is called with b=0 which will raise ZeroDivisionError.",
+      "suggestion": "Add validation: if b == 0: raise ValueError('Cannot divide by zero')"
+    },
+    {
+      "file": "src/main.py",
+      "line": 4,
+      "severity": "MEDIUM",
+      "message": "Potential TypeError if 'total' is None. Consider using sum() built-in function instead.",
+      "suggestion": "Replace with: return sum(numbers)"
+    }
+  ],
+  "timestamp": 1704110400.0
+}
