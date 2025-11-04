@@ -32,44 +32,53 @@ def verify_signature(payload_body: bytes, signature_header: str) -> bool:
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     """Handle incoming GitHub webhooks."""
-    # Verify signature
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(request.data, signature):
-        log_error("Invalid webhook signature")
-        return jsonify({"error": "Invalid signature"}), 401
-    
-    # Parse event
-    event_type = request.headers.get("X-GitHub-Event", "")
-    payload = request.json
-    
-    log_info(f"Received {event_type} event")
-    
-    # Filter events we care about
-    if event_type == "pull_request":
-        action = payload.get("action", "")
-        if action in ["opened", "synchronize", "reopened"]:
-            # Process async to respond quickly
-            thread = threading.Thread(target=process_review, args=(payload,))
-            thread.start()
-            return jsonify({"status": "queued"}), 200
+    try:
+        # Verify signature
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        if not verify_signature(request.data, signature):
+            log_error("Invalid webhook signature")
+            return jsonify({"error": "Invalid signature"}), 401
+        
+        # Parse event
+        event_type = request.headers.get("X-GitHub-Event", "")
+        payload = request.json
+        
+        log_info(f"Received {event_type} event")
+        
+        # Filter events we care about
+        if event_type == "pull_request":
+            action = payload.get("action", "")
+            if action in ["opened", "synchronize", "reopened"]:
+                # Process async to respond quickly
+                thread = threading.Thread(target=process_review, args=(payload,))
+                thread.daemon = True
+                thread.start()
+                return jsonify({"status": "queued"}), 200
+            else:
+                return jsonify({"status": "ignored", "reason": f"action={action}"}), 200
+        
+        elif event_type == "push":
+            ref = payload.get("ref", "")
+            # Only review main branches
+            if ref in ["refs/heads/main", "refs/heads/master", "refs/heads/develop"]:
+                thread = threading.Thread(target=process_review, args=(payload,))
+                thread.daemon = True
+                thread.start()
+                return jsonify({"status": "queued"}), 200
+            else:
+                return jsonify({"status": "ignored", "reason": f"ref={ref}"}), 200
+        
+        elif event_type == "ping":
+            return jsonify({"status": "pong"}), 200
+        
         else:
-            return jsonify({"status": "ignored", "reason": f"action={action}"}), 200
+            # Ignore other events but respond 200 to prevent GitHub retries
+            log_info(f"Ignoring event type: {event_type}")
+            return jsonify({"status": "ignored", "reason": f"event={event_type}"}), 200
     
-    elif event_type == "push":
-        ref = payload.get("ref", "")
-        # Only review main branches
-        if ref in ["refs/heads/main", "refs/heads/master", "refs/heads/develop"]:
-            thread = threading.Thread(target=process_review, args=(payload,))
-            thread.start()
-            return jsonify({"status": "queued"}), 200
-        else:
-            return jsonify({"status": "ignored", "reason": f"ref={ref}"}), 200
-    
-    elif event_type == "ping":
-        return jsonify({"status": "pong"}), 200
-    
-    else:
-        return jsonify({"status": "ignored", "reason": f"event={event_type}"}), 200
+    except Exception as e:
+        log_error(f"Webhook handler error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health", methods=["GET"])
