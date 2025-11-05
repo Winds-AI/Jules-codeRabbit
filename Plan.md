@@ -1,4 +1,23 @@
----
+-
+# Checkpoints
+
+- [x] 1 — Top-level goals (brief)
+- [ ] 2 — Repo layout (files & folders)
+- [ ] 3 — Core environment variables (from `.env.template`)
+- [ ] 4 — Endpoints to implement (detailed)
+- [ ] 5 — GitHub App auth (important — agent must check latest docs)
+- [ ] 6 — Jules API integration (agent must look up latest docs)
+- [ ] 7 — Queue & worker details
+- [ ] 8 — UI pages (templates)
+- [ ] 9 — Security & best practices
+- [ ] 10 — Tests & local dev
+- [ ] 11 — CI / CD
+- [ ] 12 — Render deployment notes (quick)
+- [ ] 13 — Onboarding docs & README contents (what to write)
+- [ ] 14 — Additional implementation instructions for the AI agent (explicit)
+- [ ] 15 — Minimal manifest JSON (exact content to serve)
+- [ ] 16 — Example minimal FastAPI skeleton (pseudocode — agent should implement actual code and tests)
+- [ ] 17 — Next moves I can do for you right now
 
 # 1 — Top-level goals (brief)
 
@@ -33,7 +52,8 @@ codereviewbot/
 │   ├── jules_client.py         # Jules API integration wrapper
 │   ├── queue/
 │   │   ├── queue_interface.py  # abstract queue interface
-│   │   └── redis_queue.py      # Redis implementation (or in-memory for dev)
+│   │   ├── in_memory_queue.py  # default async queue for testing
+│   │   └── redis_queue.py      # optional swap-in for scaling up
 │   ├── models/
 │   │   └── schemas.py          # pydantic request/response models
 │   ├── templates/              # Jinja2 templates for setup pages
@@ -67,7 +87,8 @@ MANIFEST_PUBLIC=true
 # App-run-time (not the per-user GitHub App)
 APP_SECRET_KEY=some_random_secret_for_session_cookie
 
-# Redis / queue
+# Queue configuration
+# Optional: set REDIS_URL when upgrading to a managed Redis queue
 REDIS_URL=redis://localhost:6379/0
 
 # Storage / DB for storing per-installation data (if you provide central storage)
@@ -182,11 +203,9 @@ DATABASE_URL=sqlite:///./dev.db  # for prototype, Postgres for production
 
 # 7 — Queue & worker details
 
-* Use Redis + RQ, or Redis + custom async worker, or Celery (choose one).
-* For a prototype:
-
-  * Provide a simple in-memory queue implementation that works locally.
-  * Provide a Redis-backed queue implementation for production (REDIS_URL).
+* Default to an async in-memory queue implementation for the prototype.
+* Keep the queue interface pluggable so a Redis-backed worker can be added later.
+* When scaling beyond the prototype, document how to provision Redis and update `REDIS_URL`.
 * Worker behavior:
 
   * Concurrent worker processes (1 by default, configurable).
@@ -289,7 +308,7 @@ DATABASE_URL=sqlite:///./dev.db  # for prototype, Postgres for production
      * `GITHUB_PRIVATE_KEY` (multi-line PEM)
      * `GITHUB_WEBHOOK_SECRET`
      * `JULES_API_KEY`
-     * `REDIS_URL` (if using Redis queue)
+     * `REDIS_URL` (only when switching to Redis-backed queue)
      * `SERVICE_BASE_URL` = Render service URL
   3. Add `WEB_CONCURRENCY` / worker config if worker is separate.
   4. Set up health check path to `/health`.
