@@ -16,7 +16,7 @@ DEFAULT_PERMISSIONS: Dict[str, str] = {
     "issues": "write",
     "commit_statuses": "write",
 }
-DEFAULT_EVENTS: List[str] = ["push", "pull_request", "installation"]
+DEFAULT_EVENTS: List[str] = ["push", "pull_request"]
 
 
 @router.get("/manifest", summary="Return GitHub App manifest")
