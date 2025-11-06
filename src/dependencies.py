@@ -1,6 +1,7 @@
 """FastAPI dependency factories."""
 
 from __future__ import annotations
+from src.logger import logger
 
 from fastapi import HTTPException
 
@@ -12,4 +13,5 @@ def settings_dependency() -> Settings:
     try:
         return get_settings()
     except SettingsError as exc:
+        logger.error(f"Failed to load settings: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

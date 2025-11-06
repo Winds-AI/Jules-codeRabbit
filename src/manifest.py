@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.config import Settings
 from src.dependencies import settings_dependency
+from src.logger import logger
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dic
     webhook_url = f"{base_url}/github/webhook"
 
     if settings.manifest_public and not base_url.startswith("https://"):
+        logger.error("MANIFEST_PUBLIC is true but SERVICE_BASE_URL is not https.")
         raise HTTPException(
             status_code=500,
             detail="SERVICE_BASE_URL must use https when MANIFEST_PUBLIC=true.",
@@ -45,5 +47,5 @@ async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dic
         "default_events": DEFAULT_EVENTS.copy(),
         "setup_url": f"{base_url}/setup",
     }
-
+    
     return manifest
