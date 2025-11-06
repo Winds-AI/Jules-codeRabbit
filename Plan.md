@@ -84,6 +84,13 @@ SERVICE_BASE_URL=https://your-setup-service.onrender.com
 # If you plan to run this central manifest service (not required for user self-hosting)
 MANIFEST_PUBLIC=true
 
+# Optional manifest fine-tuning (JSON strings)
+DEFAULT_PERMISSIONS_OVERRIDE='{"checks": "write"}'
+DEFAULT_EVENTS_OVERRIDE='["push", "pull_request"]'
+
+# Optional overrides for GitHub Enterprise
+GITHUB_API_BASE_URL=https://github.your-company.com/api/v3
+
 # App-run-time (not the per-user GitHub App)
 APP_SECRET_KEY=some_random_secret_for_session_cookie
 
@@ -126,11 +133,19 @@ DATABASE_URL=sqlite:///./dev.db  # for prototype, Postgres for production
 * Implementation steps:
 
   1. Read `code` parameter.
-  2. POST to `https://api.github.com/app-manifests/{code}/conversions` with `Accept: application/vnd.github+json`.
+  2. POST to `GITHUB_API_BASE_URL/app-manifests/{code}/conversions` with `Accept: application/vnd.github+json`.
   3. Receive JSON: `{id, slug, pem, webhook_secret, client_id, client_secret, html_url, ...}`.
-  4. Present credentials in an HTML page for the user to copy or provide a downloadable `.pem`.
+  4. Present credentials in an HTML page for the user to copy. Highlight the PEM, App ID, client credentials, and webhook secret (display once).
   5. Optionally implement an automated helper that, if the user is logged in (or has provided deployment credentials), saves these to their deployed instance (advanced, optional).
 * Security: do not persist `pem` unless you implement secure secret storage. If you persist, encrypt at rest.
+
+### Manifest Flow Quickstart
+
+1. Set `SERVICE_BASE_URL` (and, if applicable, `GITHUB_API_BASE_URL`) in your environment.
+2. Navigate to `{SERVICE_BASE_URL}/github/manifest` to fetch the GitHub App manifest JSON.
+3. Paste the manifest into `https://github.com/settings/apps/new` (or your enterprise equivalent) to create the app.
+4. After GitHub redirects back to `{SERVICE_BASE_URL}/github/register?code=...`, copy the credentials displayed in the HTML response.
+5. Update your deployment environment with the new App ID, client credentials, webhook secret, and PEM before continuing setup.
 
 ## 4.3 `/webhook` — POST
 
