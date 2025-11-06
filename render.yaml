@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: jules-code-reviewer
+    env: python
+    plan: starter
+    autoDeploy: true
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port 10000
+    healthCheckPath: /health
+    envVars:
+      - key: SERVICE_BASE_URL
+        value: ${RENDER_EXTERNAL_URL}
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: JULES_API_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false

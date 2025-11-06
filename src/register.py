@@ -79,6 +79,18 @@ def _render_success_page(conversion: Dict[str, Any], base_url: str) -> str:
         for label, value in fields.items()
     )
 
+    env_vars = {
+        "GITHUB_APP_ID": conversion.get("id", ""),
+        "GITHUB_APP_SLUG": conversion.get("slug", ""),
+        "GITHUB_CLIENT_ID": conversion.get("client_id", ""),
+        "GITHUB_CLIENT_SECRET": conversion.get("client_secret", ""),
+        "GITHUB_WEBHOOK_SECRET": conversion.get("webhook_secret", ""),
+        "GITHUB_PRIVATE_KEY": "<paste PEM contents>",
+        "SERVICE_BASE_URL": base_url,
+    }
+    env_vars_block = "\n".join(f"{key}={value}" for key, value in env_vars.items())
+    escaped_env_vars_block = html.escape(env_vars_block)
+
     security_notice = """
     <section class="notice">
         <h2>Security Notice</h2>
@@ -127,8 +139,33 @@ def _render_success_page(conversion: Dict[str, Any], base_url: str) -> str:
             <li>Add the credentials above to your deployment secrets (Render, Docker, etc.).</li>
             <li>Configure your service base URL: <code>{html.escape(base_url)}</code></li>
             <li>Share the webhook URL: <code>{html.escape(base_url)}/github/webhook</code></li>
+            <li>Review the setup checklist at <a href="{html.escape(base_url)}/setup">{html.escape(base_url)}/setup</a>.</li>
         </ol>
     </section>
+    <section>
+        <h2>Environment Variable Helper</h2>
+        <p>Copy these values into your hosting platform. Replace <code>&lt;paste PEM contents&gt;</code> with the private key from the download above.</p>
+        <textarea id="env-vars" rows="10" readonly>{escaped_env_vars_block}</textarea>
+        <button id="copy-env" type="button">Copy to clipboard</button>
+        <p class="hint">Tip: For Render, paste each line into the environment variable editor.</p>
+    </section>
+    <script>
+        const copyButton = document.getElementById('copy-env');
+        const envTextarea = document.getElementById('env-vars');
+        if (copyButton && envTextarea) {{
+            copyButton.addEventListener('click', async () => {{
+                envTextarea.select();
+                try {{
+                    await navigator.clipboard.writeText(envTextarea.value);
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(() => copyButton.textContent = 'Copy to clipboard', 2000);
+                }} catch (error) {{
+                    copyButton.textContent = 'Copy failed';
+                    setTimeout(() => copyButton.textContent = 'Copy to clipboard', 2000);
+                }}
+            }});
+        }}
+    </script>
 </body>
 </html>"""
 
