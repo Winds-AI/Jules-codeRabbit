@@ -39,7 +39,7 @@ async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dic
         "url": base_url,
         "hook_attributes": {"url": webhook_url, "active": True},
         "redirect_url": register_url,
-        "callback_url": f"{base_url}/callback",
+        "callback_urls": [f"{base_url}/callback"],
         "public": settings.manifest_public,
         "default_permissions": DEFAULT_PERMISSIONS.copy(),
         "default_events": DEFAULT_EVENTS.copy(),

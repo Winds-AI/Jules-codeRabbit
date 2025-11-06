@@ -381,7 +381,7 @@ DATABASE_URL=sqlite:///./dev.db  # for prototype, Postgres for production
     "active": true
   },
   "redirect_url": "https://YOUR_RENDER_URL/github/register",
-  "callback_url": "https://YOUR_RENDER_URL/callback",
+  "callback_urls": ["https://YOUR_RENDER_URL/callback"],
   "public": true,
   "default_permissions": {
     "contents": "read",

@@ -24,6 +24,23 @@ REQUIRED_CONVERSION_KEYS = {
 }
 
 
+def _quote_env_value(value: Any) -> str:
+    """Return a safely quoted environment variable value."""
+
+    if value is None:
+        raw_text = ""
+    else:
+        raw_text = str(value)
+
+    escaped_text = (
+        raw_text.replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("$", "\\$")
+        .replace("\n", "\\n")
+    )
+    return f'"{escaped_text}"'
+
+
 def _validate_conversion_payload(conversion: Dict[str, Any]) -> None:
     """Ensure the conversion payload contains all required credentials."""
 
@@ -88,7 +105,9 @@ def _render_success_page(conversion: Dict[str, Any], base_url: str) -> str:
         "GITHUB_PRIVATE_KEY": "<paste PEM contents>",
         "SERVICE_BASE_URL": base_url,
     }
-    env_vars_block = "\n".join(f"{key}={value}" for key, value in env_vars.items())
+    env_vars_block = "\n".join(
+        f"{key}={_quote_env_value(value)}" for key, value in env_vars.items()
+    )
     escaped_env_vars_block = html.escape(env_vars_block)
 
     security_notice = """
@@ -144,7 +163,7 @@ def _render_success_page(conversion: Dict[str, Any], base_url: str) -> str:
     </section>
     <section>
         <h2>Environment Variable Helper</h2>
-        <p>Copy these values into your hosting platform. Replace <code>&lt;paste PEM contents&gt;</code> with the private key from the download above.</p>
+        <p>Copy these values into your hosting platform. Replace <code>&lt;paste PEM contents&gt;</code> with the private key from the download above. Newline characters are represented as <code>\n</code> sequences.</p>
         <textarea id="env-vars" rows="10" readonly>{escaped_env_vars_block}</textarea>
         <button id="copy-env" type="button">Copy to clipboard</button>
         <p class="hint">Tip: For Render, paste each line into the environment variable editor.</p>
