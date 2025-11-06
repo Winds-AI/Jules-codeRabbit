@@ -1,4 +1,6 @@
 import sys
+from typing import Any
+
 import fastapi
 import uvicorn
 
@@ -17,7 +19,7 @@ app.include_router(webhook_router, tags=["webhook"])
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     return {
         "status": "The Jules Code Reviewer is operational and ready to review your code.",
         "environment": {
