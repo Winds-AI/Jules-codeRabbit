@@ -15,14 +15,13 @@ DEFAULT_PERMISSIONS: Dict[str, str] = {
     "metadata": "read",
     "pull_requests": "write",
     "issues": "write",
-    "commit_statuses": "write",
+    "statuses": "write",
 }
 DEFAULT_EVENTS: List[str] = ["push", "pull_request"]
 
 
-@router.get("/manifest", summary="Return GitHub App manifest")
-async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dict[str, Any]:
-    """Return a GitHub App manifest derived from runtime configuration."""
+def build_manifest(settings: Settings) -> Dict[str, Any]:
+    """Construct the GitHub App manifest payload based on current settings."""
 
     base_url = settings.normalized_base_url
     register_url = f"{base_url}/github/register"
@@ -35,7 +34,7 @@ async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dic
             detail="SERVICE_BASE_URL must use https when MANIFEST_PUBLIC=true.",
         )
 
-    manifest: Dict[str, Any] = {
+    return {
         "name": "CodeReviewBot",
         "description": "Automated GitHub pull request reviews powered by Google Jules.",
         "url": base_url,
@@ -47,5 +46,10 @@ async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dic
         "default_events": DEFAULT_EVENTS.copy(),
         "setup_url": f"{base_url}/setup",
     }
-    
-    return manifest
+
+
+@router.get("/manifest", summary="Return GitHub App manifest")
+async def get_manifest(settings: Settings = Depends(settings_dependency)) -> Dict[str, Any]:
+    """Return a GitHub App manifest derived from runtime configuration."""
+
+    return build_manifest(settings)

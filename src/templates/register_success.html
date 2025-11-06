@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}GitHub App Ready · Jules Code Reviewer{% endblock %}
+
+{% block quick_actions %}
+<a class="button" href="{{ base_url }}/setup" target="_blank" rel="noopener">Setup Checklist</a>
+{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1>Your GitHub App is ready</h1>
+    <p>Copy the credentials below now. They are shown only once per GitHub security guidelines.</p>
+</section>
+
+<section class="card">
+    <h2>Key credentials</h2>
+    <dl class="key-values">
+        {% for label, value in summary %}
+        <div class="key-values__row">
+            <dt>{{ label }}</dt>
+            <dd>{% if value %}{{ value }}{% else %}<em>missing</em>{% endif %}</dd>
+        </div>
+        {% endfor %}
+    </dl>
+</section>
+
+{% if pem_artifacts %}
+<section class="card">
+    <h2>Private key (PEM)</h2>
+    <p>Download the private key and store it securely. We cannot recover it later.</p>
+    <a class="button button--primary" href="{{ pem_artifacts.href }}" download="{{ pem_artifacts.filename }}">Download {{ pem_artifacts.filename }}</a>
+</section>
+{% endif %}
+
+<section class="card">
+    <h2>Environment variable helper</h2>
+    <p>Paste these lines into your hosting provider. Replace <code>&lt;paste PEM contents&gt;</code> with the contents of the downloaded file.</p>
+    <textarea id="env-block" rows="{{ env_lines|length + 2 }}" readonly>{% for line in env_lines %}{{ line }}
+{% endfor %}</textarea>
+    <button id="copy-env" class="button button--ghost" type="button" style="margin-top: 0.6rem;">Copy to clipboard</button>
+    <p class="hint">Tip: Render, Fly.io, and Docker support direct pasting of newline-separated key/value pairs.</p>
+</section>
+{% endblock %}
+
+{% block body_scripts %}
+<script>
+    const copyButton = document.getElementById('copy-env');
+    const envTextarea = document.getElementById('env-block');
+    if (copyButton && envTextarea) {
+        copyButton.addEventListener('click', async () => {
+            envTextarea.select();
+            try {
+                await navigator.clipboard.writeText(envTextarea.value);
+                copyButton.textContent = 'Copied!';
+                copyButton.classList.add('button--success');
+                setTimeout(() => {
+                    copyButton.textContent = 'Copy to clipboard';
+                    copyButton.classList.remove('button--success');
+                }, 2000);
+            } catch (error) {
+                copyButton.textContent = 'Copy failed';
+                copyButton.classList.add('button--danger');
+                setTimeout(() => {
+                    copyButton.textContent = 'Copy to clipboard';
+                    copyButton.classList.remove('button--danger');
+                }, 2000);
+            }
+        });
+    }
+</script>
+{% endblock %}

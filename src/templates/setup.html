@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Setup · Jules Code Reviewer{% endblock %}
+
+{% block quick_actions %}
+<a class="button" href="{{ repo_url }}" target="_blank" rel="noopener">View Repository</a>
+{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1>Deploy your Jules Code Reviewer app</h1>
+    <p>Complete each step to register the GitHub App, capture credentials, and configure your deployment.</p>
+</section>
+
+<section class="card-grid">
+    <article class="card">
+        <h2>1. Review project resources</h2>
+        <ul>
+            <li>Source: <a href="{{ repo_url }}" target="_blank" rel="noopener">{{ repo_url }}</a></li>
+            <li>Service base URL: <a href="{{ base_url }}" target="_blank" rel="noopener">{{ base_url }}</a></li>
+            <li>Manifest endpoint: <a href="{{ manifest_url }}" target="_blank" rel="noopener">{{ manifest_url }}</a></li>
+            <li>Webhook endpoint: <a href="{{ webhook_url }}" target="_blank" rel="noopener">{{ webhook_url }}</a></li>
+        </ul>
+    </article>
+
+    <article class="card">
+        <h2>2. Create your GitHub App</h2>
+        <p>Use the manifest flow to prefill the GitHub registration form.</p>
+        <form class="manifest-form" action="{{ manifest_launch_url }}" method="post" target="_blank" rel="noopener">
+            <input type="hidden" name="manifest" value="{{ manifest_json | e }}" />
+            <button type="submit" class="button button--primary">Create GitHub App</button>
+        </form>
+        <p class="hint">Trouble launching? Download the manifest JSON from <code>{{ manifest_url }}</code> and paste it manually.</p>
+    </article>
+</section>
+
+<section class="card">
+    <h2>3. Capture credentials from GitHub</h2>
+    <ol>
+        <li>After confirmation, GitHub redirects to <code>{{ register_url }}</code> with a temporary code.</li>
+        <li>This service exchanges the code and shows your credentials only once.</li>
+        <li>Download the PEM file immediately and store all values securely.</li>
+    </ol>
+</section>
+
+<section class="card">
+    <h2>4. Configure deployment secrets</h2>
+    <ul class="env-list">
+        {% for variable in env_variables %}
+        <li>
+            <div class="env-list__name">{{ variable.name }}</div>
+            <div class="env-list__note">{{ variable.note }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+
+<section class="card">
+    <h2>5. Local quickstart</h2>
+    <pre><code>{{ quickstart_commands }}</code></pre>
+    <p class="hint">Ensure <code>SERVICE_BASE_URL</code> points to the public HTTPS endpoint for production.</p>
+</section>
+
+<section class="notice">
+    <h2>Security reminders</h2>
+    <p>Secrets are never stored by this service. Rotate credentials from the GitHub UI if compromised.</p>
+</section>
+{% endblock %}
