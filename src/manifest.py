@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.config import Settings
 from src.dependencies import settings_dependency
-from src.logger import logger
+from src.logger import get_logger
+
+logger = get_logger()
 
 router = APIRouter()
 

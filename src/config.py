@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Final
 
 from dotenv import load_dotenv
 from pydantic import AnyHttpUrl, BaseModel, ValidationError
@@ -36,12 +37,23 @@ class Settings(BaseModel):
         return str(self.github_api_base_url).rstrip("/")
 
 
+_TRUE_VALUES: Final[set[str]] = {"1", "true", "yes", "on"}
+
+
+def _parse_bool_env(raw_value: str | None, *, default: bool = False) -> bool:
+    """Convert an environment variable string to a boolean value."""
+
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in _TRUE_VALUES
+
+
 def _build_settings() -> Settings:
     service_base_url = os.getenv("SERVICE_BASE_URL")
     if not service_base_url:
         raise SettingsError("SERVICE_BASE_URL environment variable is required.")
 
-    manifest_public = os.getenv("MANIFEST_PUBLIC", False)
+    manifest_public = _parse_bool_env(os.getenv("MANIFEST_PUBLIC"), default=False)
 
     github_api_base_url = os.getenv("GITHUB_API_BASE_URL")
 

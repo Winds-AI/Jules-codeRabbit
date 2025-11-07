@@ -27,13 +27,19 @@ This project currently focuses on providing a self-serve flow for creating a Git
    ```bash
    pip install -r requirements.txt
    ```
-4. Export the required environment variable for local development:
+4. Set up environment variables:
+   Copy the `.env.example` file to `.env`:
    ```bash
-   export SERVICE_BASE_URL="https://your-public-service"
+   cp .env.example .env
    ```
+   On Windows CMD, use:
+   ```cmd
+   copy .env.example .env
+   ```
+   Then edit `.env` and fill in the required environment variables (see the `/setup` page for the complete list).
 5. Run the FastAPI app locally:
    ```bash
-   uvicorn src.main:app --reload
+   python run.py
    ```
 6. Launch the automatic GitHub App creation flow:
 

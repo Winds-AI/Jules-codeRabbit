@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -10,8 +9,9 @@ from fastapi.templating import Jinja2Templates
 from src.config import Settings
 from src.dependencies import settings_dependency
 from src.manifest import build_manifest
+from src.utils.paths import TEMPLATES_DIR
 
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter()
 
@@ -50,13 +50,33 @@ async def setup_page(
         "manifest_json": manifest_json,
         "manifest_launch_url": "https://github.com/settings/apps/new",
         "env_variables": env_variables,
-        "quickstart_commands": "\n".join(
-            [
-                "pip install -r requirements.txt",
-                'export SERVICE_BASE_URL="https://your-public-service"',
-                "uvicorn src.main:app --reload",
-            ]
-        ),
+        "quickstart_commands": [
+            {
+                "step": 1,
+                "command": "python -m venv .venv",
+                "description": "Create virtual environment"
+            },
+            {
+                "step": 2,
+                "command": "source .venv/bin/activate",
+                "description": "Activate virtual environment (On Windows: .\\.venv\\Scripts\\Activate.ps1)"
+            },
+            {
+                "step": 3,
+                "command": "pip install -r requirements.txt",
+                "description": "Install dependencies"
+            },
+            {
+                "step": 4,
+                "command": "cp .env.example .env",
+                "description": "Copy .env.example to .env (On Windows CMD: copy .env.example .env)"
+            },
+            {
+                "step": 5,
+                "command": "python run.py",
+                "description": "Start the application"
+            },
+        ],
     }
 
     return templates.TemplateResponse("setup.html", context)

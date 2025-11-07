@@ -57,7 +57,25 @@
 
 <section class="card">
     <h2>5. Local quickstart</h2>
-    <pre><code>{{ quickstart_commands }}</code></pre>
+    <div class="command-grid">
+        {% for cmd in quickstart_commands %}
+        <div class="command-block">
+            <div class="command-block__header">
+                <span class="command-block__step">Step {{ cmd.step }}</span>
+            </div>
+            <div class="command-block__description">{{ cmd.description }}</div>
+            <div class="command-block__code-wrapper">
+                <button class="command-block__copy" data-command="{{ cmd.command | e }}" aria-label="Copy command">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="5.5" y="5.5" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M10.5 2.5H4.5C3.67 2.5 3 3.17 3 4V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <pre class="command-block__code"><code>{{ cmd.command }}</code></pre>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
     <p class="hint">Ensure <code>SERVICE_BASE_URL</code> points to the public HTTPS endpoint for production.</p>
 </section>
 
@@ -65,4 +83,54 @@
     <h2>Security reminders</h2>
     <p>Secrets are never stored by this service. Rotate credentials from the GitHub UI if compromised.</p>
 </section>
+{% endblock %}
+
+{% block body_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const copyButtons = document.querySelectorAll('.command-block__copy');
+        
+        copyButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const command = this.getAttribute('data-command');
+                
+                try {
+                    await navigator.clipboard.writeText(command);
+                    
+                    // Visual feedback
+                    const originalHTML = this.innerHTML;
+                    this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.5 4L6 11.5L2.5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                    this.style.color = 'var(--success)';
+                    
+                    setTimeout(() => {
+                        this.innerHTML = originalHTML;
+                        this.style.color = '';
+                    }, 2000);
+                } catch (err) {
+                    console.error('Failed to copy:', err);
+                    // Fallback for older browsers
+                    const textArea = document.createElement('textarea');
+                    textArea.value = command;
+                    textArea.style.position = 'fixed';
+                    textArea.style.opacity = '0';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        const originalHTML = this.innerHTML;
+                        this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.5 4L6 11.5L2.5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                        this.style.color = 'var(--success)';
+                        setTimeout(() => {
+                            this.innerHTML = originalHTML;
+                            this.style.color = '';
+                        }, 2000);
+                    } catch (fallbackErr) {
+                        console.error('Fallback copy failed:', fallbackErr);
+                    }
+                    document.body.removeChild(textArea);
+                }
+            });
+        });
+    });
+</script>
 {% endblock %}

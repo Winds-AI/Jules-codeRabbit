@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,10 +9,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.config import Settings
-from src.dependencies import settings_dependency
+from src.dependencies import github_client_dependency, settings_dependency
 from src.github_client import GitHubAPIError, GitHubAppClient
+from src.utils.paths import TEMPLATES_DIR
 
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter()
 
@@ -56,13 +56,6 @@ def _validate_conversion_payload(conversion: Dict[str, Any]) -> None:
         )
 
 
-def github_client_dependency(
-    settings: Settings = Depends(settings_dependency),
-) -> GitHubAppClient:
-    """Instantiate a GitHub App client for API interactions."""
-    return GitHubAppClient(base_url=settings.normalized_github_api_base_url)
-
-
 def _normalize_env_vars(conversion: Dict[str, Any], base_url: str) -> Dict[str, str]:
     env_vars = {
         "GITHUB_APP_ID": conversion.get("id", ""),
@@ -100,18 +93,6 @@ def _build_pem_artifacts(conversion: Dict[str, Any]) -> Optional[Dict[str, str]]
     return {"href": pem_download_href, "filename": pem_filename}
 
 
-def _mock_conversion_payload(base_url: str) -> Dict[str, Any]:
-    return {
-        "id": "123456",
-        "slug": "jules-code-reviewer",
-        "client_id": "Iv1.0123456789abcdef",
-        "client_secret": "mock_client_secret_ABC123",
-        "webhook_secret": "mock_webhook_secret_DEF456",
-        "pem": """-----BEGIN PRIVATE KEY-----\nMIIBVwIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAuMockKeyPreview\n-----END PRIVATE KEY-----\n""",
-        "mock_base_url": base_url,
-    }
-
-
 @router.get(
     "/register",
     summary="Handle GitHub App manifest conversion callback",
@@ -119,13 +100,9 @@ def _mock_conversion_payload(base_url: str) -> Dict[str, Any]:
 )
 async def register_app(
     request: Request,
-    code: str | None = Query(
-        None,
+    code: str = Query(
+        ...,
         description="Temporary manifest code provided by GitHub.",
-    ),
-    preview: bool = Query(
-        False,
-        description="Render the success page with mock data for visual preview.",
     ),
     settings: Settings = Depends(settings_dependency),
     github_client: GitHubAppClient = Depends(github_client_dependency),
@@ -133,27 +110,18 @@ async def register_app(
     """Exchange the manifest code for GitHub App credentials and present them to the user."""
 
     base_url = settings.normalized_base_url
-    if preview:
-        conversion = _mock_conversion_payload(base_url)
-    else:
-        if not code:
-            raise HTTPException(
-                status_code=400,
-                detail="GitHub manifest code is required unless preview mode is enabled.",
-            )
+    try:
+        conversion = await github_client.convert_manifest(code)
+    except GitHubAPIError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to convert GitHub App manifest: {exc}",
+        ) from exc
 
-        try:
-            conversion = await github_client.convert_manifest(code)
-        except GitHubAPIError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Failed to convert GitHub App manifest: {exc}",
-            ) from exc
-
-        try:
-            _validate_conversion_payload(conversion)
-        except ValueError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    try:
+        _validate_conversion_payload(conversion)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     pem_artifacts = _build_pem_artifacts(conversion)
     env_vars = _normalize_env_vars(conversion, base_url)
@@ -167,7 +135,6 @@ async def register_app(
         "env_values": env_vars,
         "env_lines": env_lines,
         "pem_artifacts": pem_artifacts,
-        "preview": preview,
     }
 
     return templates.TemplateResponse("register_success.html", context)
