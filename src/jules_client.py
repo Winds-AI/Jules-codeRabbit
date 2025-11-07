@@ -337,20 +337,36 @@ def _extract_agent_messages(payload: Dict[str, Any]) -> Iterable[str]:
         if activity.get("originator") != "agent":
             continue
 
-        messages = activity.get("messages") or []
-        for message in messages:
-            if text := message.get("text"):
-                yield text
+        fragments = list(_collect_text_fragments(activity))
 
-        progress = activity.get("progressUpdated")
-        if progress and (description := progress.get("description")):
-            yield description
+        for fragment in fragments:
+            yield fragment
 
-        outputs = activity.get("outputs") or []
-        for output in outputs:
-            if pull_request := output.get("pullRequest"):
-                if desc := pull_request.get("description"):
-                    yield desc
+        if len(fragments) > 1:
+            brace_fragments = [fragment for fragment in fragments if "{" in fragment or "}" in fragment]
+            if brace_fragments:
+                yield "\n".join(brace_fragments)
+            else:
+                combined = "\n".join(fragments)
+                if "{" in combined and "}" in combined:
+                    yield combined
+
+
+def _collect_text_fragments(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            yield stripped
+        return
+
+    if isinstance(value, dict):
+        for nested in value.values():
+            yield from _collect_text_fragments(nested)
+        return
+
+    if isinstance(value, list):
+        for item in value:
+            yield from _collect_text_fragments(item)
 
 
 def _extract_json_fragment(text: str) -> str | None:
