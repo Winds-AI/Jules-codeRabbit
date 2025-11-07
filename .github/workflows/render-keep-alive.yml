@@ -11,16 +11,15 @@ on:
 
 env:
   SERVICE_URL: https://jules-coderabbit.onrender.com/health
-  KEEP_ALIVE_ENABLED: ${{ vars.RENDER_KEEP_ALIVE_ENABLED || 'true' }}
 
 jobs:
   ping:
-    if: env.KEEP_ALIVE_ENABLED == 'true'
+    if: vars.RENDER_KEEP_ALIVE_ENABLED != 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Warm Render service
         run: |
           set -euo pipefail
-          echo "Pinging $SERVICE_URL"
-          curl --fail --silent --show-error "$SERVICE_URL" || echo "Ping failed"
+          echo "Pinging ${{ env.SERVICE_URL }}"
+          curl --fail --silent --show-error "${{ env.SERVICE_URL }}" || echo "Ping failed"
 
