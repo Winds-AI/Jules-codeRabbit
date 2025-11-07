@@ -248,8 +248,26 @@ class JulesClient:
                     ctx_logger.error(f"Jules API error on attempt {attempt + 1}: {exc}")
                     raise
             
+            # Log activities structure for debugging
+            activities = response_data.get("activities", [])
+            ctx_logger.debug(f"Received {len(activities)} activities on attempt {attempt + 1}")
+            if activities:
+                # Log first activity structure (truncated)
+                first_activity = activities[0]
+                activity_preview = json.dumps(first_activity, indent=2)
+                if len(activity_preview) > 1000:
+                    activity_preview = activity_preview[:1000] + "\n... (truncated)"
+                ctx_logger.debug(f"First activity structure:\n{activity_preview}")
+            
             # Check for agent messages in activities
-            for text in _extract_agent_messages(response_data):
+            agent_texts = list(_extract_agent_messages(response_data))
+            if agent_texts:
+                ctx_logger.debug(f"Extracted {len(agent_texts)} agent text fragments")
+                for idx, text in enumerate(agent_texts):
+                    preview = text[:200] + "..." if len(text) > 200 else text
+                    ctx_logger.debug(f"Fragment {idx + 1}: {preview}")
+            
+            for text in agent_texts:
                 if parsed := _extract_json_fragment(text):
                     ctx_logger.info(f"Found JSON response in activities on attempt {attempt + 1}")
                     return parsed
@@ -333,40 +351,44 @@ def _format_files_for_prompt(context: ReviewContext, *, max_files: int = 15, max
 
 
 def _extract_agent_messages(payload: Dict[str, Any]) -> Iterable[str]:
+    """Extract agent messages from Jules activities payload.
+    
+    This function handles both PR and commit review responses. Jules returns
+    agent messages in the same format regardless of review type:
+    - agentMessaged.agentMessage: Primary location for JSON responses (PRs & commits)
+    - messages[].text: Alternative message format
+    - progressUpdated.description: Progress updates
+    - outputs[].pullRequest.description: PR outputs
+    
+    Returns all text fragments that might contain the JSON review response.
+    """
     for activity in payload.get("activities", []):
         if activity.get("originator") != "agent":
             continue
 
-        fragments = list(_collect_text_fragments(activity))
+        # Prioritize agentMessaged.agentMessage - this is where Jules returns the JSON response
+        # Works for both PRs and commits (verified with commit reviews)
+        if agent_messaged := activity.get("agentMessaged"):
+            if agent_message := agent_messaged.get("agentMessage"):
+                yield agent_message
 
-        for fragment in fragments:
-            yield fragment
+        # Also check messages array (if present)
+        messages = activity.get("messages") or []
+        for message in messages:
+            if text := message.get("text"):
+                yield text
 
-        if len(fragments) > 1:
-            brace_fragments = [fragment for fragment in fragments if "{" in fragment or "}" in fragment]
-            if brace_fragments:
-                yield "\n".join(brace_fragments)
-            else:
-                combined = "\n".join(fragments)
-                if "{" in combined and "}" in combined:
-                    yield combined
+        # Check progressUpdated.description (for progress updates)
+        progress = activity.get("progressUpdated")
+        if progress and (description := progress.get("description")):
+            yield description
 
-
-def _collect_text_fragments(value: Any) -> Iterable[str]:
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            yield stripped
-        return
-
-    if isinstance(value, dict):
-        for nested in value.values():
-            yield from _collect_text_fragments(nested)
-        return
-
-    if isinstance(value, list):
-        for item in value:
-            yield from _collect_text_fragments(item)
+        # Check outputs (for pull requests, etc.)
+        outputs = activity.get("outputs") or []
+        for output in outputs:
+            if pull_request := output.get("pullRequest"):
+                if desc := pull_request.get("description"):
+                    yield desc
 
 
 def _extract_json_fragment(text: str) -> str | None:
@@ -374,17 +396,21 @@ def _extract_json_fragment(text: str) -> str | None:
     if not text:
         return None
 
-    if text.startswith("`"):
-        match = re.search(r"```(?:json)?\s*(\{.*?\})```", text, re.DOTALL)
+    # Handle markdown code blocks: ```json\n{...}\n```
+    if "```" in text:
+        # Match code block with optional json language tag
+        match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\s*\n?```", text, re.DOTALL)
         if match:
-            return match.group(1)
+            return match.group(1).strip()
 
+    # Handle plain JSON object
     if text.startswith("{") and text.endswith("}"):
         return text
 
+    # Try to find JSON object anywhere in the text
     match = re.search(r"(\{.*\})", text, re.DOTALL)
     if match:
-        return match.group(1)
+        return match.group(1).strip()
     return None
 
 
