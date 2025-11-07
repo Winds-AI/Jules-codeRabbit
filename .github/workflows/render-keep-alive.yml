@@ -1,0 +1,26 @@
+name: Render Keep Alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      override:
+        description: "Temporarily run a manual ping"
+        required: false
+
+env:
+  SERVICE_URL: https://jules-coderabbit.onrender.com/health
+  KEEP_ALIVE_ENABLED: ${{ vars.RENDER_KEEP_ALIVE_ENABLED || 'true' }}
+
+jobs:
+  ping:
+    if: env.KEEP_ALIVE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Warm Render service
+        run: |
+          set -euo pipefail
+          echo "Pinging $SERVICE_URL"
+          curl --fail --silent --show-error "$SERVICE_URL" || echo "Ping failed"
+

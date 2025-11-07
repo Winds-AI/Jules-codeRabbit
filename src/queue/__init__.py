@@ -31,15 +31,18 @@ class _ReviewQueue:
     async def _worker_loop(self) -> None:
         while True:
             job = await self._queue.get()
+            logger.info(f"=== QUEUE: Dequeued job for processing (delivery_id: {job.delivery_id}, event: {job.event}) ===")
             try:
                 if self._handler is None:
                     logger.warning(
                         f"No review job handler configured; dropping delivery {job.delivery_id}."
                     )
                 else:
+                    logger.debug(f"Invoking review handler for delivery_id: {job.delivery_id}")
                     await self._handler(job)
+                    logger.info(f"=== QUEUE: Job processing completed successfully (delivery_id: {job.delivery_id}) ===")
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception(f"Unhandled exception while processing job {job.delivery_id}: {exc}")
+                logger.exception(f"=== QUEUE: Unhandled exception while processing job {job.delivery_id}: {exc} ===")
             finally:
                 self._queue.task_done()
 
@@ -82,7 +85,10 @@ async def enqueue_review_job(job: ReviewJob | dict[str, Any]) -> None:
     """Add a job to the in-memory queue, starting the worker if needed."""
 
     review_job = _coerce_job(job)
+    logger.debug(f"Adding job to queue: delivery_id={review_job.delivery_id}, event={review_job.event}, "
+                 f"pending_jobs={_QUEUE.pending()}")
     await _QUEUE.enqueue(review_job)
+    logger.debug(f"Job added to queue: delivery_id={review_job.delivery_id}, new_pending_jobs={_QUEUE.pending()}")
 
 
 def configure_review_handler(handler: ReviewJobHandler | None) -> None:

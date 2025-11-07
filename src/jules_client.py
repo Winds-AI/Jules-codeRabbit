@@ -46,29 +46,35 @@ class JulesClient:
         await self._client.aclose()
 
     async def analyze(self, context: ReviewContext) -> ReviewAnalysis:
+        logger.debug(f"Building prompt for {context.repository} ({len(context.files)} files)")
         prompt = _build_prompt(context)
+        logger.debug(f"Prompt built: {len(prompt)} characters")
 
+        logger.info(f"Creating Jules session for {context.repository}")
         session = await self._create_session(context, prompt, title=f"Code review for {context.repository}")
         session_id = session.get("name")
         if not session_id:
             logger.error(f"Session creation response: {session}")
             raise JulesAPIError("Jules session did not return an identifier.")
 
-        logger.debug(f"Created session: {session_id}")
+        logger.info(f"Created Jules session: {session_id} for repository: {context.repository}")
 
         # When creating a session with a prompt, it starts processing immediately.
         # The sendMessage endpoint is for additional messages after session creation.
         # Since we already included the prompt in session creation, we skip sendMessage.
         # If you need to send additional messages later, you can call sendMessage separately.
 
+        logger.info(f"Polling for Jules response from session: {session_id}")
         raw_response = await self._poll_for_response(session_id)
         if not raw_response:
             logger.warning(f"Jules returned no analysis for {context.repository}")
             return ReviewAnalysis()
 
+        logger.debug(f"Parsing Jules response for {context.repository} ({len(raw_response)} characters)")
         analysis = _parse_analysis(raw_response)
         if not analysis:
             raise JulesAPIError("Unable to parse Jules response into review findings.")
+        logger.info(f"Jules analysis parsed: {len(analysis.comments)} comments, summary={'yes' if analysis.summary else 'no'}")
         return analysis
 
     async def _create_session(self, context: ReviewContext, prompt: str, *, title: str) -> Dict[str, Any]:
@@ -103,6 +109,7 @@ class JulesClient:
             "sourceContext": source_context,
         }
         logger.debug(f"Creating session with body: {json.dumps({**request_body, 'prompt': prompt[:100] + '...' if len(prompt) > 100 else prompt})}")
+        logger.info(f"Creating Jules session for source: {source_context.get('source')}")
         
         response = await self._client.post(
             "/sessions",
@@ -121,16 +128,41 @@ class JulesClient:
         _raise_for_status("send message", response)
 
     async def _poll_for_response(self, session_id: str, *, attempts: int = 10, delay: float = 1.5) -> str | None:
+        logger.debug(f"Starting to poll for activities from session {session_id} (max {attempts} attempts)")
         for attempt in range(attempts):
-            response = await self._client.get(
-                f"/{session_id}/activities",
-                params={"pageSize": 50},
-            )
-            _raise_for_status("list activities", response)
-            for text in _extract_agent_messages(response.json()):
+            logger.debug(f"Polling attempt {attempt + 1}/{attempts} for session {session_id}")
+            try:
+                response = await self._client.get(
+                    f"/{session_id}/activities",
+                    params={"pageSize": 50},
+                )
+                _raise_for_status("list activities", response)
+                response_data = response.json()
+                activities_count = len(response_data.get("activities", []))
+                logger.debug(f"Received {activities_count} activities from session {session_id}")
+            except JulesAPIError as exc:
+                # If we get a 404, it likely means the session doesn't exist or the source is invalid
+                if "404" in str(exc) or "NOT_FOUND" in str(exc):
+                    logger.error(
+                        f"=== JULES: Session {session_id} not found (404) on attempt {attempt + 1}. "
+                        f"This may indicate the source repository doesn't exist in Jules or the session is invalid. "
+                        f"Error: {exc} ==="
+                    )
+                    raise JulesAPIError(
+                        f"Session not found. The repository source may not be registered in Jules, "
+                        f"or the session was created with invalid parameters. Original error: {exc}"
+                    ) from exc
+                logger.warning(f"Jules API error on attempt {attempt + 1}: {exc}")
+                raise
+            for text in _extract_agent_messages(response_data):
                 if parsed := _extract_json_fragment(text):
+                    logger.info(f"Found JSON response in activities from session {session_id} on attempt {attempt + 1}")
                     return parsed
-            await asyncio.sleep(delay * (attempt + 1) / attempts)
+            if attempt < attempts - 1:
+                sleep_time = delay * (attempt + 1) / attempts
+                logger.debug(f"No response yet, sleeping {sleep_time:.2f}s before next attempt")
+                await asyncio.sleep(sleep_time)
+        logger.warning(f"No response received after {attempts} attempts for session {session_id}")
         return None
 
 
