@@ -48,7 +48,7 @@ class JulesClient:
     async def analyze(self, context: ReviewContext) -> ReviewAnalysis:
         prompt = _build_prompt(context)
 
-        session = await self._create_session(prompt, title=f"Code review for {context.repository}")
+        session = await self._create_session(context, prompt, title=f"Code review for {context.repository}")
         session_id = session.get("name")
         if not session_id:
             raise JulesAPIError("Jules session did not return an identifier.")
@@ -64,12 +64,38 @@ class JulesClient:
             raise JulesAPIError("Unable to parse Jules response into review findings.")
         return analysis
 
-    async def _create_session(self, prompt: str, *, title: str) -> Dict[str, Any]:
+    async def _create_session(self, context: ReviewContext, prompt: str, *, title: str) -> Dict[str, Any]:
+        # Parse repository name (format: "owner/repo")
+        repo_parts = context.repository.split("/", 1)
+        if len(repo_parts) != 2:
+            raise JulesAPIError(f"Invalid repository format: {context.repository}. Expected 'owner/repo'.")
+        owner, repo = repo_parts
+
+        # Build sourceContext
+        source_context: Dict[str, Any] = {
+            "source": f"sources/github/{owner}/{repo}",
+        }
+
+        # Add branch information if available
+        github_repo_context: Dict[str, Any] = {}
+        if isinstance(context, PushReviewContext) and context.ref:
+            # Extract branch name from ref (format: "refs/heads/main" -> "main")
+            if context.ref.startswith("refs/heads/"):
+                branch = context.ref.replace("refs/heads/", "")
+                github_repo_context["startingBranch"] = branch
+        elif isinstance(context, PullRequestReviewContext) and context.head_ref:
+            # For PRs, use the head branch ref directly (already in branch name format)
+            github_repo_context["startingBranch"] = context.head_ref
+
+        if github_repo_context:
+            source_context["githubRepoContext"] = github_repo_context
+
         response = await self._client.post(
             "/sessions",
             json={
                 "prompt": prompt,
                 "title": title,
+                "sourceContext": source_context,
             },
         )
         _raise_for_status("create session", response)

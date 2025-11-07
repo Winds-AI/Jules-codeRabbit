@@ -78,6 +78,7 @@ async def build_review_context(
             title=pr_info.title,
             head_sha=pr_info.head.sha,
             base_sha=pr_info.base.sha,
+            head_ref=pr_info.head.ref,
             files=_serialize_files(files),
             url=pr_info.url,
         )

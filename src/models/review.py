@@ -35,6 +35,7 @@ class PullRequestReviewContext:
     title: str | None
     head_sha: str | None
     base_sha: str | None
+    head_ref: str | None = None
     files: List[FilePatch] = field(default_factory=list)
     url: str | None = None
 
