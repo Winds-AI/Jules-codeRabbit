@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from src.config import Settings, SettingsError
 from src.dependencies import settings_dependency
-from src.logger import get_logger
+from src.logger import get_logger, log_with_context, log_timing, log_success, log_failure
 from src.queue import enqueue_review_job
 from src.queue.models import (
     PullRequestInfo,
@@ -142,78 +142,116 @@ async def receive_webhook(
 ) -> Dict[str, str]:
     """Verify webhook signatures, dedupe deliveries, and enqueue review jobs."""
 
+    start_time = time.time()
     logger.info("=== WEBHOOK RECEIVED ===")
+    
+    # Get delivery_id early for context (may be None initially)
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+    event = request.headers.get("X-GitHub-Event")
     
     try:
         credentials = settings.require_code_review_credentials()
         logger.debug("Code review credentials loaded successfully")
     except SettingsError as exc:  # pragma: no cover - guarded by config validation
-        logger.error(f"Webhook received but configuration is incomplete: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        log_failure(logger, "Configuration incomplete", exc, delivery_id=delivery_id, event_type=event)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Configuration error: {exc}"
+        ) from exc
 
     raw_body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256")
-    logger.debug(f"Verifying webhook signature (delivery_id: {request.headers.get('X-GitHub-Delivery', 'unknown')})")
-    if not verify_github_signature(credentials.github_webhook_secret, raw_body, signature):
-        logger.warning("Webhook signature verification failed.")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+    
+    if not delivery_id:
+        log_failure(logger, "Missing X-GitHub-Delivery header", event_type=event)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-GitHub-Delivery header"
+        )
+    
+    if not event:
+        log_failure(logger, "Missing X-GitHub-Event header", delivery_id=delivery_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-GitHub-Event header"
+        )
 
+    ctx_logger = log_with_context(logger, delivery_id=delivery_id, event_type=event)
+    ctx_logger.info(f"Processing {event} event")
+    
+    # Verify signature
+    if not verify_github_signature(credentials.github_webhook_secret, raw_body, signature):
+        log_failure(logger, "Webhook signature verification failed", delivery_id=delivery_id, event_type=event)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signature"
+        )
+
+    # Parse JSON payload
     try:
         payload = json.loads(raw_body.decode("utf-8"))
-        logger.debug("Webhook payload parsed successfully")
+        ctx_logger.debug("Webhook payload parsed successfully")
     except json.JSONDecodeError as exc:
-        logger.warning(f"Webhook payload is not valid JSON: {exc}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+        log_failure(logger, "Invalid JSON payload", exc, delivery_id=delivery_id, event_type=event)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload"
+        ) from exc
 
-    event = request.headers.get("X-GitHub-Event")
-    if not event:
-        logger.error("Missing X-GitHub-Event header")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-GitHub-Event header")
-
-    delivery_id = request.headers.get("X-GitHub-Delivery")
-    if not delivery_id:
-        logger.error("Missing X-GitHub-Delivery header")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-GitHub-Delivery header")
-
-    logger.info(f"Processing {event} event (delivery_id: {delivery_id})")
-
+    # Check for duplicate delivery
     now = time.time()
     if _is_duplicate(delivery_id, now):
-        logger.info(f"Duplicate delivery {delivery_id} ignored.")
+        ctx_logger.info("Duplicate delivery ignored")
         return {"status": "ignored", "reason": "duplicate"}
 
+    # Build job payload
     try:
-        logger.debug(f"Building job payload for {event} event")
-        job_payload = _build_job_payload(event, payload)
-        repo_full_name = getattr(job_payload, "repository", None)
-        repo_name = repo_full_name.full_name if repo_full_name else "unknown repository"
-        logger.info(f"Job payload built successfully for repository: {repo_name}")
+        with log_timing(ctx_logger, "build_job_payload"):
+            job_payload = _build_job_payload(event, payload)
+            repo_full_name = getattr(job_payload, "repository", None)
+            repo_name = repo_full_name.full_name if repo_full_name else "unknown repository"
+            ctx_logger.info(f"Job payload built successfully for repository: {repo_name}")
     except IgnoreEventError as exc:
-        logger.debug(f"Webhook ignored: {exc}")
+        ctx_logger.debug(f"Webhook ignored: {exc}")
         return {"status": "ignored", "reason": str(exc)}
     except ValueError as exc:
-        logger.warning(f"Webhook payload rejected: {exc}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        log_failure(logger, f"Invalid payload structure: {exc}", exc, delivery_id=delivery_id, event_type=event)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)
+        ) from exc
 
-    try:
-        logger.debug(f"Creating ReviewJob for delivery_id: {delivery_id}")
-        job = ReviewJob(delivery_id=delivery_id, event=event, payload=job_payload)
-        logger.debug(f"ReviewJob created successfully: delivery_id={job.delivery_id}, event={job.event}")
-    except ValidationError as exc:  # pragma: no cover - defensive branch, shouldn't happen
-        logger.warning(f"Failed to construct review job: {exc}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job payload") from exc
-
-    try:
-        logger.info(f"Enqueueing review job for delivery_id: {delivery_id}")
-        await enqueue_review_job(job)
-        logger.info(f"Review job enqueued successfully for delivery_id: {delivery_id}")
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception(f"Failed to enqueue review job: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to enqueue job") from exc
-
-    _mark_delivery(delivery_id, now)
+    # Create ReviewJob
     repo_full_name = getattr(job_payload, "repository", None)
     repo_name = repo_full_name.full_name if repo_full_name else "unknown repository"
-    logger.info(f"=== WEBHOOK PROCESSED: Enqueued {event} event for {repo_name} (delivery_id: {delivery_id}) ===")
+    ctx_logger = log_with_context(logger, delivery_id=delivery_id, event_type=event, repository=repo_name)
+    
+    try:
+        with log_timing(ctx_logger, "create_review_job"):
+            job = ReviewJob(delivery_id=delivery_id, event=event, payload=job_payload)
+            ctx_logger.debug(f"ReviewJob created successfully")
+    except ValidationError as exc:  # pragma: no cover - defensive branch, shouldn't happen
+        log_failure(logger, f"Failed to construct review job: {exc}", exc, delivery_id=delivery_id, event_type=event, repository=repo_name)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job payload"
+        ) from exc
+
+    # Enqueue job
+    try:
+        with log_timing(ctx_logger, "enqueue_review_job"):
+            await enqueue_review_job(job)
+            ctx_logger.info("Review job enqueued successfully")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log_failure(logger, f"Failed to enqueue review job: {exc}", exc, delivery_id=delivery_id, event_type=event, repository=repo_name)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue job"
+        ) from exc
+
+    _mark_delivery(delivery_id, now)
+    processing_time = time.time() - start_time
+    log_success(logger, f"Webhook accepted and enqueued {event} event for {repo_name} (processed in {processing_time:.3f}s)", 
+                delivery_id=delivery_id, event_type=event, repository=repo_name)
 
     return {"status": "accepted"}

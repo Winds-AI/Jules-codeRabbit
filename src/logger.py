@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from loguru import logger as _logger
 
@@ -65,3 +68,50 @@ def get_logger(*, log_dir: str | Path | None = None, level: str | None = None):
 
     configure_logger(log_dir=log_dir, level=level)
     return _logger
+
+
+def log_with_context(logger_instance, **context: str | int | None) -> Any:
+    """Add context fields to log messages.
+    
+    Usage:
+        logger = log_with_context(get_logger(), delivery_id="123", repository="owner/repo")
+        logger.info("Processing job")
+    """
+    return logger_instance.bind(**{k: v for k, v in context.items() if v is not None})
+
+
+def log_timing(logger_instance, operation: str, **context: str | int | None):
+    """Context manager to log operation timing.
+    
+    Usage:
+        with log_timing(logger, "fetch_files", repository="owner/repo"):
+            # operation code
+    """
+    @contextmanager
+    def _timing():
+        start_time = time.time()
+        ctx_logger = log_with_context(logger_instance, **context)
+        ctx_logger.debug(f"Starting {operation}")
+        try:
+            yield ctx_logger
+            duration = time.time() - start_time
+            ctx_logger.debug(f"Completed {operation} in {duration:.3f}s")
+        except Exception as exc:
+            duration = time.time() - start_time
+            ctx_logger.error(f"Failed {operation} after {duration:.3f}s: {exc}")
+            raise
+    return _timing()
+
+
+def log_success(logger_instance, message: str, **context: str | int | None) -> None:
+    """Log a success message with context."""
+    log_with_context(logger_instance, **context).info(f"=== SUCCESS: {message} ===")
+
+
+def log_failure(logger_instance, message: str, error: Exception | None = None, **context: str | int | None) -> None:
+    """Log a failure message with context and optional error."""
+    ctx_logger = log_with_context(logger_instance, **context)
+    if error:
+        ctx_logger.error(f"=== FAILURE: {message} | Error: {error} ===")
+    else:
+        ctx_logger.error(f"=== FAILURE: {message} ===")

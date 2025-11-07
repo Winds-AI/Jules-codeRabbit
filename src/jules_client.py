@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from typing import Any, Dict, Iterable, List
 
 import httpx
 
-from src.logger import get_logger
+from src.logger import get_logger, log_with_context, log_timing, log_failure
 from src.models.review import (
     PullRequestReviewContext,
     PushReviewContext,
@@ -46,38 +47,67 @@ class JulesClient:
         await self._client.aclose()
 
     async def analyze(self, context: ReviewContext) -> ReviewAnalysis:
-        logger.debug(f"Building prompt for {context.repository} ({len(context.files)} files)")
-        prompt = _build_prompt(context)
-        logger.debug(f"Prompt built: {len(prompt)} characters")
+        ctx_logger = log_with_context(logger, repository=context.repository)
+        ctx_logger.debug(f"Building prompt ({len(context.files)} files)")
+        
+        with log_timing(ctx_logger, "build_prompt"):
+            prompt = _build_prompt(context)
+        ctx_logger.debug(f"Prompt built: {len(prompt)} characters")
 
-        logger.info(f"Creating Jules session for {context.repository}")
-        session = await self._create_session(context, prompt, title=f"Code review for {context.repository}")
+        ctx_logger.info("Creating Jules session")
+        try:
+            with log_timing(ctx_logger, "create_jules_session"):
+                session = await self._create_session(context, prompt, title=f"Code review for {context.repository}")
+        except JulesAPIError as exc:
+            log_failure(logger, f"Failed to create Jules session: {exc}", exc, repository=context.repository)
+            raise
+        
         session_id = session.get("name")
         if not session_id:
+            log_failure(logger, "Jules session did not return an identifier", repository=context.repository)
             logger.error(f"Session creation response: {session}")
             raise JulesAPIError("Jules session did not return an identifier.")
 
-        logger.info(f"Created Jules session: {session_id} for repository: {context.repository}")
+        session_ctx_logger = log_with_context(logger, repository=context.repository, session_id=session_id)
+        session_ctx_logger.info(f"Created Jules session: {session_id}")
 
-        # When creating a session with a prompt, it starts processing immediately.
-        # The sendMessage endpoint is for additional messages after session creation.
-        # Since we already included the prompt in session creation, we skip sendMessage.
-        # If you need to send additional messages later, you can call sendMessage separately.
+        # Add a brief delay to allow session initialization before polling
+        session_ctx_logger.debug("Waiting for session to initialize before polling")
+        await asyncio.sleep(2.0)
 
-        logger.info(f"Polling for Jules response from session: {session_id}")
-        raw_response = await self._poll_for_response(session_id)
+        session_ctx_logger.info("Polling for Jules response")
+        try:
+            with log_timing(session_ctx_logger, "poll_jules_response"):
+                raw_response = await self._poll_for_response(session_id, logger=session_ctx_logger)
+        except JulesAPIError as exc:
+            log_failure(logger, f"Failed to poll Jules session: {exc}", exc, 
+                       repository=context.repository, session_id=session_id)
+            raise
+        
         if not raw_response:
-            logger.warning(f"Jules returned no analysis for {context.repository}")
+            session_ctx_logger.warning("Jules returned no analysis")
             return ReviewAnalysis()
 
-        logger.debug(f"Parsing Jules response for {context.repository} ({len(raw_response)} characters)")
-        analysis = _parse_analysis(raw_response)
+        session_ctx_logger.debug(f"Parsing Jules response ({len(raw_response)} characters)")
+        try:
+            analysis = _parse_analysis(raw_response)
+        except Exception as exc:
+            log_failure(logger, f"Failed to parse Jules response: {exc}", exc, 
+                       repository=context.repository, session_id=session_id)
+            raise JulesAPIError("Unable to parse Jules response into review findings.") from exc
+        
         if not analysis:
+            log_failure(logger, "Jules response parsed but produced no analysis", 
+                       repository=context.repository, session_id=session_id)
             raise JulesAPIError("Unable to parse Jules response into review findings.")
-        logger.info(f"Jules analysis parsed: {len(analysis.comments)} comments, summary={'yes' if analysis.summary else 'no'}")
+        
+        session_ctx_logger.info(f"Jules analysis parsed: {len(analysis.comments)} comments, "
+                               f"summary={'yes' if analysis.summary else 'no'}")
         return analysis
 
     async def _create_session(self, context: ReviewContext, prompt: str, *, title: str) -> Dict[str, Any]:
+        ctx_logger = log_with_context(logger, repository=context.repository)
+        
         # Parse repository name (format: "owner/repo")
         repo_parts = context.repository.split("/", 1)
         if len(repo_parts) != 2:
@@ -103,22 +133,40 @@ class JulesClient:
         if github_repo_context:
             source_context["githubRepoContext"] = github_repo_context
 
+        source_path = source_context.get("source")
+        ctx_logger.info(f"Creating Jules session for source: {source_path}")
+        
         request_body = {
             "prompt": prompt,
             "title": title,
             "sourceContext": source_context,
         }
-        logger.debug(f"Creating session with body: {json.dumps({**request_body, 'prompt': prompt[:100] + '...' if len(prompt) > 100 else prompt})}")
-        logger.info(f"Creating Jules session for source: {source_context.get('source')}")
+        ctx_logger.debug(f"Session request: source={source_path}, "
+                         f"prompt_length={len(prompt)}, has_branch={'startingBranch' in github_repo_context}")
         
-        response = await self._client.post(
-            "/sessions",
-            json=request_body,
-        )
-        _raise_for_status("create session", response)
-        session_response = response.json()
-        logger.debug(f"Session creation response: {session_response}")
-        return session_response
+        try:
+            response = await self._client.post(
+                "/sessions",
+                json=request_body,
+            )
+            _raise_for_status("create session", response)
+            session_response = response.json()
+            ctx_logger.debug("Session created successfully")
+            return session_response
+        except JulesAPIError as exc:
+            # Categorize errors
+            error_str = str(exc)
+            if "400" in error_str or "BAD_REQUEST" in error_str:
+                ctx_logger.error(f"Invalid session request (400): {exc}")
+            elif "401" in error_str or "UNAUTHORIZED" in error_str:
+                ctx_logger.error(f"Authentication failed (401): {exc}")
+            elif "403" in error_str or "FORBIDDEN" in error_str:
+                ctx_logger.error(f"Permission denied (403): {exc}")
+            elif "500" in error_str or "INTERNAL" in error_str:
+                ctx_logger.error(f"Jules server error (500): {exc}")
+            else:
+                ctx_logger.error(f"Jules API error: {exc}")
+            raise
 
     async def _send_message(self, session_id: str, prompt: str) -> None:
         response = await self._client.post(
@@ -127,10 +175,21 @@ class JulesClient:
         )
         _raise_for_status("send message", response)
 
-    async def _poll_for_response(self, session_id: str, *, attempts: int = 10, delay: float = 1.5) -> str | None:
-        logger.debug(f"Starting to poll for activities from session {session_id} (max {attempts} attempts)")
+    async def _poll_for_response(self, session_id: str, *, attempts: int = 10, delay: float = 1.5, logger=None) -> str | None:
+        if logger is None:
+            logger = globals()['logger']
+        
+        ctx_logger = log_with_context(logger, session_id=session_id)
+        ctx_logger.debug(f"Starting to poll for activities (max {attempts} attempts)")
+        
+        # Allow retries on 404 for the first few attempts (session initialization delay)
+        max_404_retries = 3
+        last_error = None
+        
         for attempt in range(attempts):
-            logger.debug(f"Polling attempt {attempt + 1}/{attempts} for session {session_id}")
+            attempt_start = time.time()
+            ctx_logger.debug(f"Polling attempt {attempt + 1}/{attempts}")
+            
             try:
                 response = await self._client.get(
                     f"/{session_id}/activities",
@@ -139,30 +198,72 @@ class JulesClient:
                 _raise_for_status("list activities", response)
                 response_data = response.json()
                 activities_count = len(response_data.get("activities", []))
-                logger.debug(f"Received {activities_count} activities from session {session_id}")
+                attempt_duration = time.time() - attempt_start
+                ctx_logger.debug(f"Received {activities_count} activities (took {attempt_duration:.3f}s)")
             except JulesAPIError as exc:
-                # If we get a 404, it likely means the session doesn't exist or the source is invalid
-                if "404" in str(exc) or "NOT_FOUND" in str(exc):
-                    logger.error(
-                        f"=== JULES: Session {session_id} not found (404) on attempt {attempt + 1}. "
-                        f"This may indicate the source repository doesn't exist in Jules or the session is invalid. "
-                        f"Error: {exc} ==="
-                    )
-                    raise JulesAPIError(
-                        f"Session not found. The repository source may not be registered in Jules, "
-                        f"or the session was created with invalid parameters. Original error: {exc}"
-                    ) from exc
-                logger.warning(f"Jules API error on attempt {attempt + 1}: {exc}")
-                raise
+                attempt_duration = time.time() - attempt_start
+                last_error = exc
+                error_str = str(exc)
+                
+                # Handle 404 errors (session not found)
+                if "404" in error_str or "NOT_FOUND" in error_str:
+                    if attempt < max_404_retries:
+                        # Transient initialization delay - retry with exponential backoff
+                        sleep_time = delay * 2 * (attempt + 1)
+                        ctx_logger.warning(
+                            f"Session not found (404) on attempt {attempt + 1} - "
+                            f"may be initializing. Retrying in {sleep_time:.2f}s..."
+                        )
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    else:
+                        # Permanent 404 after retries
+                        ctx_logger.error(
+                            f"Session not found (404) after {attempt + 1} attempts. "
+                            f"This likely indicates the source repository doesn't exist in Jules or the session is invalid."
+                        )
+                        raise JulesAPIError(
+                            f"Session not found after {attempt + 1} attempts. "
+                            f"The repository source may not be registered in Jules, "
+                            f"or the session was created with invalid parameters. Original error: {exc}"
+                        ) from exc
+                elif "429" in error_str or "RATE_LIMIT" in error_str:
+                    # Rate limit - use exponential backoff
+                    sleep_time = delay * (2 ** attempt)
+                    ctx_logger.warning(f"Rate limit (429) on attempt {attempt + 1}. Waiting {sleep_time:.2f}s...")
+                    await asyncio.sleep(sleep_time)
+                    continue
+                elif "500" in error_str or "INTERNAL" in error_str:
+                    # Server error - retry with backoff
+                    if attempt < attempts - 1:
+                        sleep_time = delay * (attempt + 1)
+                        ctx_logger.warning(f"Jules server error (500) on attempt {attempt + 1}. Retrying in {sleep_time:.2f}s...")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    else:
+                        ctx_logger.error(f"Jules server error (500) after {attempt + 1} attempts")
+                        raise
+                else:
+                    # Other errors - fail immediately
+                    ctx_logger.error(f"Jules API error on attempt {attempt + 1}: {exc}")
+                    raise
+            
+            # Check for agent messages in activities
             for text in _extract_agent_messages(response_data):
                 if parsed := _extract_json_fragment(text):
-                    logger.info(f"Found JSON response in activities from session {session_id} on attempt {attempt + 1}")
+                    ctx_logger.info(f"Found JSON response in activities on attempt {attempt + 1}")
                     return parsed
+            
+            # No response yet, wait before next attempt
             if attempt < attempts - 1:
                 sleep_time = delay * (attempt + 1) / attempts
-                logger.debug(f"No response yet, sleeping {sleep_time:.2f}s before next attempt")
+                ctx_logger.debug(f"No response yet, sleeping {sleep_time:.2f}s before next attempt")
                 await asyncio.sleep(sleep_time)
-        logger.warning(f"No response received after {attempts} attempts for session {session_id}")
+        
+        # No response after all attempts
+        ctx_logger.warning(f"No response received after {attempts} attempts")
+        if last_error:
+            ctx_logger.debug(f"Last error was: {last_error}")
         return None
 
 

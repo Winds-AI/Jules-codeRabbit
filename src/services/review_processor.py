@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from src.config import SettingsError, get_settings
 from src.github_client import GitHubInstallationClient, GitHubAPIError
 from src.jules_client import JulesAPIError, JulesClient
-from src.logger import get_logger
+from src.logger import get_logger, log_with_context, log_timing, log_success, log_failure
 from src.models.review import (
     PullRequestReviewContext,
     PushReviewContext,
@@ -21,69 +21,95 @@ from src.services.review_context import build_review_context
 logger = get_logger()
 
 
+class ReviewProcessorError(RuntimeError):
+    """Raised when review processing fails."""
+    
+    def __init__(self, message: str, step: str, original_error: Exception | None = None):
+        super().__init__(message)
+        self.step = step
+        self.original_error = original_error
+
+
 class ReviewProcessor:
     async def __call__(self, job: ReviewJob) -> None:
-        logger.info(f"=== PROCESSOR: Starting review processing (delivery_id: {job.delivery_id}, event: {job.event}) ===")
+        ctx_logger = log_with_context(logger, delivery_id=job.delivery_id, event_type=job.event)
+        ctx_logger.info("=== PROCESSOR: Starting review processing ===")
         
         try:
-            settings = get_settings()
-            credentials = settings.require_code_review_credentials()
-            logger.debug(f"Settings and credentials loaded for job {job.delivery_id}")
+            with log_timing(ctx_logger, "load_configuration"):
+                settings = get_settings()
+                credentials = settings.require_code_review_credentials()
+                ctx_logger.debug("Settings and credentials loaded")
         except SettingsError as exc:  # pragma: no cover - configuration guard
-            logger.error(f"Skipping job {job.delivery_id} due to missing configuration: {exc}")
-            return
+            log_failure(logger, "Configuration missing", exc, delivery_id=job.delivery_id, event_type=job.event)
+            raise ReviewProcessorError("Configuration incomplete", "load_configuration", exc) from exc
 
-        logger.debug(f"Creating GitHub client for job {job.delivery_id}")
-        github_client = GitHubInstallationClient(
-            base_url=settings.normalized_github_api_base_url,
-            app_id=credentials.github_app_id,
-            private_key_pem=credentials.github_private_key_pem,
-        )
-        logger.debug(f"GitHub client created for job {job.delivery_id}")
-
+        github_client = None
         try:
-            try:
-                logger.info(f"Building review context for job {job.delivery_id}")
-                context = await build_review_context(github_client, job)
-                logger.info(f"Review context built successfully for {context.repository}")
-            except GitHubAPIError as exc:
-                logger.error(
-                    f"=== PROCESSOR: Failed to build review context for job {job.delivery_id}: {exc} (status={exc.status_code}) ==="
+            with log_timing(ctx_logger, "create_github_client"):
+                github_client = GitHubInstallationClient(
+                    base_url=settings.normalized_github_api_base_url,
+                    app_id=credentials.github_app_id,
+                    private_key_pem=credentials.github_private_key_pem,
                 )
-                return
-            except (ValueError, TypeError) as exc:
-                logger.error(f"=== PROCESSOR: Invalid job payload for {job.delivery_id}: {exc} ===")
-                return
+                ctx_logger.debug("GitHub client created")
 
-            logger.info(
-                f"Prepared {job.event} review context for {context.repository} (files={len(context.files)}, "
+            try:
+                with log_timing(ctx_logger, "build_review_context"):
+                    context = await build_review_context(github_client, job)
+                    ctx_logger.info(f"Review context built successfully for {context.repository}")
+            except GitHubAPIError as exc:
+                log_failure(logger, f"Failed to build review context: {exc} (status={exc.status_code})", 
+                          exc, delivery_id=job.delivery_id, event_type=job.event)
+                raise ReviewProcessorError("Failed to build review context", "build_review_context", exc) from exc
+            except (ValueError, TypeError) as exc:
+                log_failure(logger, f"Invalid job payload: {exc}", exc, delivery_id=job.delivery_id, event_type=job.event)
+                raise ReviewProcessorError("Invalid job payload", "build_review_context", exc) from exc
+
+            repo_ctx_logger = log_with_context(logger, 
+                                              delivery_id=job.delivery_id, 
+                                              event_type=job.event,
+                                              repository=context.repository)
+            
+            repo_ctx_logger.info(
+                f"Prepared {job.event} review context (files={len(context.files)}, "
                 f"installation_id={context.installation_id})"
             )
 
-            logger.info(f"Creating Jules client for analysis of {context.repository}")
-            jules_client = JulesClient(credentials.jules_api_key)
+            jules_client = None
+            analysis = None
             try:
-                logger.info(f"=== PROCESSOR: Starting Jules analysis for {context.repository} ===")
-                analysis = await jules_client.analyze(context)
-                logger.info(f"=== PROCESSOR: Jules analysis completed for {context.repository} "
-                           f"(comments={len(analysis.comments)}, has_summary={bool(analysis.summary)}) ===")
+                with log_timing(repo_ctx_logger, "jules_analysis"):
+                    repo_ctx_logger.info("Creating Jules client")
+                    jules_client = JulesClient(credentials.jules_api_key)
+                    repo_ctx_logger.info("=== PROCESSOR: Starting Jules analysis ===")
+                    analysis = await jules_client.analyze(context)
+                    repo_ctx_logger.info(f"=== PROCESSOR: Jules analysis completed "
+                                       f"(comments={len(analysis.comments)}, has_summary={bool(analysis.summary)}) ===")
             except JulesAPIError as exc:
-                logger.error(f"=== PROCESSOR: Jules analysis failed for {context.repository}: {exc} ===")
-                return
+                log_failure(logger, f"Jules analysis failed: {exc}", exc, 
+                           delivery_id=job.delivery_id, event_type=job.event, repository=context.repository)
+                raise ReviewProcessorError("Jules analysis failed", "jules_analysis", exc) from exc
             finally:
-                await jules_client.aclose()
-                logger.debug(f"Jules client closed for {context.repository}")
+                if jules_client:
+                    await jules_client.aclose()
+                    repo_ctx_logger.debug("Jules client closed")
 
             if not analysis.comments and not analysis.summary:
-                logger.info(f"No findings reported by Jules for {context.repository}")
+                repo_ctx_logger.info("No findings reported by Jules - review complete")
                 return
 
-            logger.info(f"Publishing review results for {context.repository}")
-            await self._publish_results(github_client, context, analysis)
-            logger.info(f"=== PROCESSOR: Review processing completed successfully for {context.repository} ===")
+            with log_timing(repo_ctx_logger, "publish_results"):
+                repo_ctx_logger.info(f"Publishing review results ({len(analysis.comments)} comments, "
+                                  f"summary={'yes' if analysis.summary else 'no'})")
+                await self._publish_results(github_client, context, analysis)
+            
+            log_success(logger, f"Review processing completed successfully for {context.repository}",
+                       delivery_id=job.delivery_id, event_type=job.event, repository=context.repository)
         finally:
-            await github_client.aclose()
-            logger.debug(f"GitHub client closed for job {job.delivery_id}")
+            if github_client:
+                await github_client.aclose()
+                ctx_logger.debug("GitHub client closed")
 
     async def _publish_results(
         self,
@@ -91,20 +117,25 @@ class ReviewProcessor:
         context: ReviewContext,
         analysis: ReviewAnalysis,
     ) -> None:
-        logger.info(f"Publishing review results for {context.repository} "
-                   f"({len(analysis.comments)} comments, summary={'yes' if analysis.summary else 'no'})")
+        ctx_logger = log_with_context(logger, repository=context.repository)
+        ctx_logger.info(f"Publishing review results ({len(analysis.comments)} comments, "
+                       f"summary={'yes' if analysis.summary else 'no'})")
         try:
             if isinstance(context, PullRequestReviewContext):
-                logger.debug(f"Publishing PR review for PR #{context.pull_number}")
+                ctx_logger.debug(f"Publishing PR review for PR #{context.pull_number}")
                 await self._publish_pull_request_review(github_client, context, analysis)
             elif isinstance(context, PushReviewContext):
-                logger.debug(f"Publishing push review for commit {context.after}")
+                ctx_logger.debug(f"Publishing push review for commit {context.after}")
                 await self._publish_push_review(github_client, context, analysis)
             else:  # pragma: no cover - defensive branch
-                logger.warning(f"Unsupported review context type: {type(context)}")
-            logger.info(f"Review results published successfully for {context.repository}")
+                ctx_logger.warning(f"Unsupported review context type: {type(context)}")
+            log_success(logger, f"Review results published successfully for {context.repository}",
+                       repository=context.repository)
         except GitHubAPIError as exc:
-            logger.error(f"=== PROCESSOR: Failed to post review comments to GitHub for {context.repository}: {exc} ===")
+            log_failure(logger, f"Failed to post review comments to GitHub: {exc}", exc, 
+                       repository=context.repository)
+            # Don't re-raise - publishing failure shouldn't fail the entire job
+            # The analysis was successful, just couldn't post comments
 
     async def _publish_pull_request_review(
         self,
@@ -112,6 +143,8 @@ class ReviewProcessor:
         context: PullRequestReviewContext,
         analysis: ReviewAnalysis,
     ) -> None:
+        ctx_logger = log_with_context(logger, repository=context.repository)
+        
         comments_payload = [
             _build_pr_comment_payload(finding)
             for finding in analysis.comments
@@ -121,14 +154,10 @@ class ReviewProcessor:
         summary_body = _format_summary_body(analysis.summary, analysis.comments)
 
         if not comments_payload and not summary_body:
-            logger.info(
-                f"Jules produced no actionable comments for PR #{context.pull_number}"
-            )
+            ctx_logger.info(f"Jules produced no actionable comments for PR #{context.pull_number}")
             return
 
-        logger.info(
-            f"Submitting review for PR #{context.pull_number} with {len(comments_payload)} inline comments."
-        )
+        ctx_logger.info(f"Submitting review for PR #{context.pull_number} with {len(comments_payload)} inline comments")
 
         await github_client.create_pull_request_review(
             installation_id=context.installation_id,
@@ -144,11 +173,14 @@ class ReviewProcessor:
         context: PushReviewContext,
         analysis: ReviewAnalysis,
     ) -> None:
+        ctx_logger = log_with_context(logger, repository=context.repository)
+        
         target_commit = context.after or (context.commits[-1] if context.commits else None)
         if not target_commit:
-            logger.warning("Push review missing target commit SHA; skipping comment publish.")
+            ctx_logger.warning("Push review missing target commit SHA; skipping comment publish")
             return
 
+        comments_posted = 0
         for finding in analysis.comments:
             body = _format_comment_body(finding)
             await github_client.create_commit_comment(
@@ -159,6 +191,7 @@ class ReviewProcessor:
                 path=finding.path,
                 line=finding.start_line,
             )
+            comments_posted += 1
 
         if analysis.summary:
             summary_body = _format_summary_body(analysis.summary, analysis.comments)
@@ -168,6 +201,9 @@ class ReviewProcessor:
                 commit_sha=target_commit,
                 body=summary_body,
             )
+            comments_posted += 1
+        
+        ctx_logger.info(f"Posted {comments_posted} comment(s) to commit {target_commit[:8]}")
 
 
 def _build_pr_comment_payload(finding: ReviewFinding) -> Dict[str, Any]:
