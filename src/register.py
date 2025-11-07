@@ -64,6 +64,7 @@ def _normalize_env_vars(conversion: Dict[str, Any], base_url: str) -> Dict[str, 
         "GITHUB_CLIENT_SECRET": conversion.get("client_secret", ""),
         "GITHUB_WEBHOOK_SECRET": conversion.get("webhook_secret", ""),
         "GITHUB_PRIVATE_KEY": "<paste PEM contents>",
+        "JULES_API_KEY": "<paste Jules API key>",
         "SERVICE_BASE_URL": base_url,
     }
     return {key: _quote_env_value(value) for key, value in env_vars.items()}

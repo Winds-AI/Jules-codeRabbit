@@ -27,7 +27,7 @@ async def setup_page(
     manifest_json = json.dumps(manifest, separators=(",", ":"))
     manifest_url = f"{base_url}/github/manifest"
     register_url = f"{base_url}/github/register?code=<code>"
-    webhook_url = f"{base_url}/github/webhook"
+    webhook_url = f"{base_url}/webhook"
     repo_url = "https://github.com/Winds-AI/Jules-codeRabbit"
 
     env_variables = [
@@ -37,6 +37,7 @@ async def setup_page(
         {"name": "GITHUB_CLIENT_SECRET", "note": "Value from the register success page"},
         {"name": "GITHUB_WEBHOOK_SECRET", "note": "Value from the register success page"},
         {"name": "GITHUB_PRIVATE_KEY", "note": "Paste PEM contents from the download"},
+        {"name": "JULES_API_KEY", "note": "Paste the Jules API key from https://jules.google.com"},
         {"name": "SERVICE_BASE_URL", "note": base_url},
     ]
 
@@ -68,8 +69,8 @@ async def setup_page(
             },
             {
                 "step": 4,
-                "command": "cp .env.example .env",
-                "description": "Copy .env.example to .env (On Windows CMD: copy .env.example .env)"
+                "command": "touch .env",
+                "description": "Create a .env file (use your editor on Windows: type nul > .env)"
             },
             {
                 "step": 5,

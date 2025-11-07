@@ -2,21 +2,21 @@
 # Checkpoints
 
 - [x] 1 — Top-level goals (brief)
-- [ ] 2 — Repo layout (files & folders)
-- [ ] 3 — Core environment variables (from `.env.template`)
-- [ ] 4 — Endpoints to implement (detailed)
-- [ ] 5 — GitHub App auth (important — agent must check latest docs)
+- [x] 2 — Repo layout (files & folders)
+- [x] 3 — Core environment variables (from `.env.template`)
+- [x] 4 — Endpoints to implement (detailed)
+- [x] 5 — GitHub App auth (important — agent must check latest docs)
 - [ ] 6 — Jules API integration (agent must look up latest docs)
 - [ ] 7 — Queue & worker details
-- [ ] 8 — UI pages (templates)
+- [x] 8 — UI pages (templates)
 - [ ] 9 — Security & best practices
 - [ ] 10 — Tests & local dev
 - [ ] 11 — CI / CD
-- [ ] 12 — Render deployment notes (quick)
-- [ ] 13 — Onboarding docs & README contents (what to write)
-- [ ] 14 — Additional implementation instructions for the AI agent (explicit)
-- [ ] 15 — Minimal manifest JSON (exact content to serve)
-- [ ] 16 — Example minimal FastAPI skeleton (pseudocode — agent should implement actual code and tests)
+- [x] 12 — Render deployment notes (quick)
+- [x] 13 — Onboarding docs & README contents (what to write)
+- [x] 14 — Additional implementation instructions for the AI agent (explicit)
+- [x] 15 — Minimal manifest JSON (exact content to serve)
+- [x] 16 — Example minimal FastAPI skeleton (pseudocode — agent should implement actual code and tests)
 - [ ] 17 — Next moves I can do for you right now
 
 # 1 — Top-level goals (brief)

@@ -27,7 +27,7 @@ def build_manifest(settings: Settings) -> Dict[str, Any]:
 
     base_url = settings.normalized_base_url
     register_url = f"{base_url}/github/register"
-    webhook_url = f"{base_url}/github/webhook"
+    webhook_url = f"{base_url}/webhook"
 
     if settings.manifest_public and not base_url.startswith("https://"):
         logger.error("MANIFEST_PUBLIC is true but SERVICE_BASE_URL is not https.")

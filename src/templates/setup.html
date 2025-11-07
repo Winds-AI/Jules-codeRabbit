@@ -56,7 +56,18 @@
 </section>
 
 <section class="card">
-    <h2>5. Local quickstart</h2>
+    <h2>5. Understand the automated review flow</h2>
+    <ol>
+        <li>GitHub sends `push` and `pull_request` events to <code>{{ webhook_url }}</code> using the webhook secret.</li>
+        <li>The service verifies the `X-Hub-Signature-256`, dedupes deliveries, and queues a review job.</li>
+        <li>A background worker fetches diffs with an installation token, then calls the Jules API for analysis.</li>
+        <li>Inline comments and a severity-weighted summary are posted back to the commit or pull request.</li>
+    </ol>
+    <p class="hint">Need to rotate keys? Update the environment variables and restart the service so cached tokens refresh.</p>
+</section>
+
+<section class="card">
+    <h2>6. Local quickstart</h2>
     <div class="command-grid">
         {% for cmd in quickstart_commands %}
         <div class="command-block">

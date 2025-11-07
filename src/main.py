@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from src.manifest import router as manifest_router
 from src.register import router as register_router
 from src.setup_ui import router as setup_router
+from src.queue import configure_review_handler, shutdown_queue
+from src.services.review_processor import ReviewProcessor
 from src.utils.paths import STATIC_DIR
 from src.webhook import router as webhook_router
 
@@ -39,3 +41,13 @@ def health() -> dict[str, Any]:
             "uvicorn version": uvicorn.__version__,
         },
     }
+
+
+@app.on_event("startup")
+async def _configure_queue_worker() -> None:
+    configure_review_handler(ReviewProcessor())
+
+
+@app.on_event("shutdown")
+async def _shutdown_queue_worker() -> None:
+    await shutdown_queue()

@@ -1,63 +1,73 @@
-# Jules Code Reviewer – GitHub App Setup
+# Jules Code Reviewer – GitHub App + Jules workflow
 
-This project currently focuses on providing a self-serve flow for creating a GitHub App via a hosted manifest. Jules diff analysis and automated webhook handling are intentionally out of scope for now.
+This service hosts a GitHub App manifest and now delivers fully automated code reviews. When a push or pull request event arrives via webhook, the app verifies the signature, collects GitHub diffs with installation authentication, ships them to the [Jules API](https://developers.google.com/jules/api), and posts inline comments plus a review summary back to GitHub.
+
+## What you get
+
+- Hosted `/github/manifest` and `/github/register` endpoints to bootstrap per-user GitHub Apps.
+- HMAC validated `/webhook` endpoint with delivery de-duplication.
+- Async in-process job queue that fetches diffs, calls Jules, and publishes results.
+- Inline review comments for both PRs and single-commit pushes, plus a severity-weighted summary comment.
 
 ## Prerequisites
 
 - Python 3.11+
-- `SERVICE_BASE_URL` environment variable pointing to the deployed FastAPI service (must be HTTPS in production)
-- Network access to the GitHub REST API
+- Network access to `api.github.com` (or your GitHub Enterprise host) and `jules.googleapis.com`
+- GitHub App credentials created via the manifest flow
+- A Jules API key generated from the Jules console
 
-## Quick Start
+## Required environment variables
 
-1. Create a virtual environment:
-   ```bash
-   python -m venv .venv
-   ```
-2. Activate the virtual environment:
-   - **Windows (PowerShell):**
-     ```powershell
-     .\.venv\Scripts\Activate.ps1
-     ```
-   - **macOS / Linux (bash):**
-     ```bash
-     source .venv/bin/activate
-     ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Set up environment variables:
-   Copy the `.env.example` file to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-   On Windows CMD, use:
-   ```cmd
-   copy .env.example .env
-   ```
-   Then edit `.env` and fill in the required environment variables (see the `/setup` page for the complete list).
-5. Run the FastAPI app locally:
-   ```bash
-   python run.py
-   ```
-6. Launch the automatic GitHub App creation flow:
+Set these before starting the service (locally you can create a `.env` file; on Render/other hosts use environment configuration):
 
-   [![Create GitHub App](https://img.shields.io/badge/Create%20GitHub%20App-blue?style=for-the-badge)](https://github.com/settings/apps/new?manifest=%7B%22name%22%3A%22CodeReviewBot%22%2C%22description%22%3A%22Automated%20GitHub%20pull%20request%20reviews%20powered%20by%20Google%20Jules.%22%2C%22url%22%3A%22https%3A%2F%2Fjules-coderabbit.onrender.com%22%2C%22hook_attributes%22%3A%7B%22url%22%3A%22https%3A%2F%2Fjules-coderabbit.onrender.com%2Fgithub%2Fwebhook%22%2C%22active%22%3Atrue%7D%2C%22redirect_url%22%3A%22https%3A%2F%2Fjules-coderabbit.onrender.com%2Fgithub%2Fregister%22%2C%22callback_urls%22%3A%5B%22https%3A%2F%2Fjules-coderabbit.onrender.com%2Fcallback%22%5D%2C%22public%22%3Afalse%2C%22default_permissions%22%3A%7B%22contents%22%3A%22read%22%2C%22metadata%22%3A%22read%22%2C%22pull_requests%22%3A%22write%22%2C%22issues%22%3A%22write%22%2C%22commit_statuses%22%3A%22write%22%7D%2C%22default_events%22%3A%5B%22push%22%2C%22pull_request%22%5D%2C%22setup_url%22%3A%22https%3A%2F%2Fjules-coderabbit.onrender.com%2Fsetup%22%7D)
-7. After GitHub redirects back to `/github/register?code=...`, capture the credentials shown on the success page. **We do not store any secrets.**
-8. Follow the `/setup` page for a deployment checklist.
+- `SERVICE_BASE_URL` – Public HTTPS URL of this service
+- `GITHUB_APP_ID` – Numeric ID from the manifest conversion page
+- `GITHUB_PRIVATE_KEY` – PEM contents of the GitHub App private key
+- `GITHUB_WEBHOOK_SECRET` – Secret used to sign webhooks
+- `JULES_API_KEY` – Jules API key passed via `X-Goog-Api-Key`
+- `GITHUB_API_BASE_URL` *(optional)* – Override for GitHub Enterprise instances
+- `MANIFEST_PUBLIC` *(optional)* – Set to `true` if the manifest endpoint is exposed publicly
+
+## Local development
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python run.py
+```
+
+While running locally, set `SERVICE_BASE_URL` to a tunnel (e.g., `ngrok`) so GitHub can reach your webhook.
+
+## Deployment checklist
+
+1. Visit `/github/manifest` and create your GitHub App using the generated manifest.
+2. Copy the credentials from `/github/register?code=...` into your host’s environment settings.
+3. Add `JULES_API_KEY` from the Jules console (Settings → API Keys).
+4. Deploy the FastAPI app and confirm `/health` returns `200`.
+5. Install your GitHub App on the target repositories and push a commit to trigger the review pipeline.
 
 ## Endpoints
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/github/manifest` | GET | Returns manifest JSON with URLs derived from `SERVICE_BASE_URL`. |
-| `/github/register` | GET | Exchanges the manifest code for credentials and renders a one-time HTML page with copy helpers. |
-| `/setup` | GET | Static instructions enumerating the manual steps required after registration. |
-| `/health` | GET | Returns service status and version metadata. |
+| `/github/manifest` | GET | Generates a GitHub App manifest based on `SERVICE_BASE_URL`. |
+| `/github/register` | GET | Exchanges the manifest code for app credentials and renders copy helpers. |
+| `/webhook` | POST | Verifies webhook signatures, dedupes deliveries, and enqueues review jobs. |
+| `/setup` | GET | Human-readable setup guidance including env var reminders. |
+| `/health` | GET | Service and dependency metadata for probes. |
 
-## Security Notes
+## Operational notes
 
-- Credentials displayed on `/github/register` are never persisted. Users must copy and store them immediately.
-- `SERVICE_BASE_URL` must use HTTPS when the manifest is public.
-- Webhook processing and Jules integrations are currently inactive, so no GitHub events are handled.
+- Webhook signatures use `X-Hub-Signature-256` HMAC verification and the delivery ID cache prevents double-processing within one hour.
+- GitHub API access uses short-lived installation tokens minted from the app’s private key; tokens are cached per installation.
+- The review worker sends diffs to Jules with explicit instructions to return JSON `{summary, comments[]}`. Responses are parsed and converted into PR reviews or commit comments.
+- Comment severity is echoed in each inline body and summarized once per review.
+- Commit reviews target the push `after` SHA; summaries post as top-level commit comments.
+- Errors from GitHub or Jules are logged and the associated job is skipped (future improvements could add retries/backoff).
+
+## Security checklist
+
+- Secrets are never persisted—everything is sourced from environment variables at runtime.
+- Always deploy behind HTTPS and keep `SERVICE_BASE_URL` updated to avoid signature mismatches.
+- Rotate the GitHub webhook secret and Jules API key periodically; restart the service so cached tokens refresh.
