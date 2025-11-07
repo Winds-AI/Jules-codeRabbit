@@ -184,6 +184,7 @@ class JulesClient:
         
         # Allow retries on 404 for the first few attempts (session initialization delay)
         max_404_retries = 3
+        consecutive_404_count = 0
         last_error = None
         
         for attempt in range(attempts):
@@ -200,6 +201,8 @@ class JulesClient:
                 activities_count = len(response_data.get("activities", []))
                 attempt_duration = time.time() - attempt_start
                 ctx_logger.debug(f"Received {activities_count} activities (took {attempt_duration:.3f}s)")
+                # Reset 404 counter on successful response
+                consecutive_404_count = 0
             except JulesAPIError as exc:
                 attempt_duration = time.time() - attempt_start
                 last_error = exc
@@ -207,25 +210,29 @@ class JulesClient:
                 
                 # Handle 404 errors (session not found)
                 if "404" in error_str or "NOT_FOUND" in error_str:
-                    if attempt < max_404_retries:
+                    consecutive_404_count += 1
+                    if consecutive_404_count <= max_404_retries:
                         # Transient initialization delay - retry with exponential backoff
-                        sleep_time = delay * 2 * (attempt + 1)
+                        sleep_time = delay * 2 * consecutive_404_count
                         ctx_logger.warning(
                             f"Session not found (404) on attempt {attempt + 1} - "
-                            f"may be initializing. Retrying in {sleep_time:.2f}s..."
+                            f"may be initializing. Retrying in {sleep_time:.2f}s... "
+                            f"(404 count: {consecutive_404_count}/{max_404_retries})"
                         )
                         await asyncio.sleep(sleep_time)
                         continue
                     else:
-                        # Permanent 404 after retries
+                        # Permanent 404 after retries - session still initializing or invalid
                         ctx_logger.error(
-                            f"Session not found (404) after {attempt + 1} attempts. "
-                            f"This likely indicates the source repository doesn't exist in Jules or the session is invalid."
+                            f"Session not found (404) after {consecutive_404_count} consecutive attempts. "
+                            f"Session may still be initializing (VM booting, repository cloning). "
+                            f"This indicates the session is not yet ready for polling."
                         )
                         raise JulesAPIError(
-                            f"Session not found after {attempt + 1} attempts. "
-                            f"The repository source may not be registered in Jules, "
-                            f"or the session was created with invalid parameters. Original error: {exc}"
+                            f"Session not found after {consecutive_404_count} consecutive 404 errors. "
+                            f"The session may still be initializing (VM booting, repository cloning). "
+                            f"Please wait longer before polling or check if the session was created successfully. "
+                            f"Original error: {exc}"
                         ) from exc
                 elif "429" in error_str or "RATE_LIMIT" in error_str:
                     # Rate limit - use exponential backoff
