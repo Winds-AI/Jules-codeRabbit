@@ -71,9 +71,15 @@ class JulesClient:
         session_ctx_logger = log_with_context(logger, repository=context.repository, session_id=session_id)
         session_ctx_logger.info(f"Created Jules session: {session_id}")
 
-        # Add a brief delay to allow session initialization before polling
-        session_ctx_logger.debug("Waiting for session to initialize before polling")
-        await asyncio.sleep(2.0)
+        # Wait for session to be ready (VM booting, repository cloning)
+        session_ctx_logger.info("Waiting for session to initialize (VM booting, repository cloning)")
+        try:
+            with log_timing(session_ctx_logger, "wait_for_session_ready"):
+                await self._wait_for_session_ready(session_id, logger=session_ctx_logger)
+        except JulesAPIError as exc:
+            log_failure(logger, f"Session failed to become ready: {exc}", exc, 
+                       repository=context.repository, session_id=session_id)
+            raise
 
         session_ctx_logger.info("Polling for Jules response")
         try:
@@ -175,15 +181,118 @@ class JulesClient:
         )
         _raise_for_status("send message", response)
 
-    async def _poll_for_response(self, session_id: str, *, attempts: int = 10, delay: float = 1.5, logger=None) -> str | None:
+    async def _wait_for_session_ready(
+        self, 
+        session_id: str, 
+        *, 
+        max_attempts: int = 20, 
+        initial_delay: float = 2.0,
+        max_delay: float = 10.0,
+        logger=None
+    ) -> None:
+        """Wait for the session to be ready (not returning 404).
+        
+        This handles the initialization phase where Jules is:
+        - Booting up the VM
+        - Cloning the repository
+        - Setting up the environment
+        
+        Args:
+            session_id: The session ID to check
+            max_attempts: Maximum number of attempts to check session readiness
+            initial_delay: Initial delay between attempts (seconds)
+            max_delay: Maximum delay between attempts (seconds)
+            logger: Optional logger instance
+            
+        Raises:
+            JulesAPIError: If the session doesn't become ready after max_attempts
+        """
+        if logger is None:
+            logger = globals()['logger']
+        
+        ctx_logger = log_with_context(logger, session_id=session_id)
+        ctx_logger.debug(f"Waiting for session to be ready (max {max_attempts} attempts)")
+        
+        consecutive_404_count = 0
+        
+        for attempt in range(max_attempts):
+            attempt_start = time.time()
+            try:
+                # Try to get the session - if it exists, it's ready
+                response = await self._client.get(f"/{session_id}")
+                _raise_for_status("get session", response)
+                session_data = response.json()
+                attempt_duration = time.time() - attempt_start
+                
+                # Session exists and is accessible
+                ctx_logger.info(
+                    f"Session is ready (attempt {attempt + 1}/{max_attempts}, "
+                    f"took {attempt_duration:.3f}s)"
+                )
+                # Log session state if available
+                if state := session_data.get("state"):
+                    ctx_logger.debug(f"Session state: {state}")
+                return
+                
+            except JulesAPIError as exc:
+                attempt_duration = time.time() - attempt_start
+                error_str = str(exc)
+                
+                # Handle 404 errors (session not found - still initializing)
+                if "404" in error_str or "NOT_FOUND" in error_str:
+                    consecutive_404_count += 1
+                    # Use exponential backoff with a cap
+                    delay = min(initial_delay * (1.5 ** attempt), max_delay)
+                    
+                    ctx_logger.debug(
+                        f"Session not ready yet (404) on attempt {attempt + 1}/{max_attempts} - "
+                        f"may still be initializing. Waiting {delay:.2f}s... "
+                        f"(consecutive 404s: {consecutive_404_count})"
+                    )
+                    
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # Final attempt failed
+                        ctx_logger.error(
+                            f"Session did not become ready after {max_attempts} attempts. "
+                            f"Session may still be initializing (VM booting, repository cloning)."
+                        )
+                        raise JulesAPIError(
+                            f"Session did not become ready after {max_attempts} attempts. "
+                            f"The session may still be initializing (VM booting, repository cloning). "
+                            f"This can take several minutes for large repositories. "
+                            f"Original error: {exc}"
+                        ) from exc
+                else:
+                    # Other errors - fail immediately
+                    ctx_logger.error(f"Failed to check session readiness: {exc}")
+                    raise
+
+    async def _poll_for_response(self, session_id: str, *, attempts: int = 30, delay: float = 2.0, logger=None) -> str | None:
+        """Poll for activities and extract JSON response from Jules.
+        
+        Note: This assumes the session is already ready (not returning 404).
+        Use _wait_for_session_ready() first to ensure the session is initialized.
+        
+        Args:
+            session_id: The session ID to poll
+            attempts: Maximum number of polling attempts
+            delay: Base delay between attempts (seconds)
+            logger: Optional logger instance
+            
+        Returns:
+            JSON string if found, None if no response after all attempts
+        """
         if logger is None:
             logger = globals()['logger']
         
         ctx_logger = log_with_context(logger, session_id=session_id)
         ctx_logger.debug(f"Starting to poll for activities (max {attempts} attempts)")
         
-        # Allow retries on 404 for the first few attempts (session initialization delay)
-        max_404_retries = 3
+        # Track consecutive 404s (should be rare if session is ready, but handle gracefully)
+        max_404_retries = 5
         consecutive_404_count = 0
         last_error = None
         
@@ -208,30 +317,28 @@ class JulesClient:
                 last_error = exc
                 error_str = str(exc)
                 
-                # Handle 404 errors (session not found)
+                # Handle 404 errors (should be rare if session was ready, but handle gracefully)
                 if "404" in error_str or "NOT_FOUND" in error_str:
                     consecutive_404_count += 1
                     if consecutive_404_count <= max_404_retries:
-                        # Transient initialization delay - retry with exponential backoff
-                        sleep_time = delay * 2 * consecutive_404_count
+                        # Transient issue - retry with exponential backoff
+                        sleep_time = min(delay * (1.5 ** consecutive_404_count), 10.0)
                         ctx_logger.warning(
-                            f"Session not found (404) on attempt {attempt + 1} - "
-                            f"may be initializing. Retrying in {sleep_time:.2f}s... "
+                            f"Unexpected 404 on attempt {attempt + 1} - "
+                            f"retrying in {sleep_time:.2f}s... "
                             f"(404 count: {consecutive_404_count}/{max_404_retries})"
                         )
                         await asyncio.sleep(sleep_time)
                         continue
                     else:
-                        # Permanent 404 after retries - session still initializing or invalid
+                        # Too many 404s - session may have been deleted or invalid
                         ctx_logger.error(
                             f"Session not found (404) after {consecutive_404_count} consecutive attempts. "
-                            f"Session may still be initializing (VM booting, repository cloning). "
-                            f"This indicates the session is not yet ready for polling."
+                            f"This may indicate the session was deleted or is invalid."
                         )
                         raise JulesAPIError(
                             f"Session not found after {consecutive_404_count} consecutive 404 errors. "
-                            f"The session may still be initializing (VM booting, repository cloning). "
-                            f"Please wait longer before polling or check if the session was created successfully. "
+                            f"The session may have been deleted or is invalid. "
                             f"Original error: {exc}"
                         ) from exc
                 elif "429" in error_str or "RATE_LIMIT" in error_str:
@@ -281,8 +388,12 @@ class JulesClient:
             
             # No response yet, wait before next attempt
             if attempt < attempts - 1:
-                sleep_time = delay * (attempt + 1) / attempts
-                ctx_logger.debug(f"No response yet, sleeping {sleep_time:.2f}s before next attempt")
+                # Use exponential backoff with a cap
+                sleep_time = min(delay * (1.2 ** attempt), 10.0)
+                ctx_logger.debug(
+                    f"No JSON response yet (found {len(activities)} activities), "
+                    f"sleeping {sleep_time:.2f}s before next attempt"
+                )
                 await asyncio.sleep(sleep_time)
         
         # No response after all attempts
