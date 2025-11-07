@@ -18,7 +18,7 @@ def _serialize_files(files: List[dict]) -> List[FilePatch]:
         # GitHub API may return "filename" or "path" depending on endpoint
         path = file.get("filename") or file.get("path")
         if not path:
-            logger.warning("Skipping file entry missing filename/path: %s", file)
+            logger.warning(f"Skipping file entry missing filename/path: {file}")
             continue
         serialized.append(
             FilePatch(

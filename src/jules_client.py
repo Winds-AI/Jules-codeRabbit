@@ -56,7 +56,7 @@ class JulesClient:
         await self._send_message(session_id, prompt)
         raw_response = await self._poll_for_response(session_id)
         if not raw_response:
-            logger.warning("Jules returned no analysis for %s", context.repository)
+            logger.warning(f"Jules returned no analysis for {context.repository}")
             return ReviewAnalysis()
 
         analysis = _parse_analysis(raw_response)

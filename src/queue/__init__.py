@@ -34,13 +34,12 @@ class _ReviewQueue:
             try:
                 if self._handler is None:
                     logger.warning(
-                        "No review job handler configured; dropping delivery %s.",
-                        job.delivery_id,
+                        f"No review job handler configured; dropping delivery {job.delivery_id}."
                     )
                 else:
                     await self._handler(job)
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Unhandled exception while processing job %s: %s", job.delivery_id, exc)
+                logger.exception(f"Unhandled exception while processing job {job.delivery_id}: {exc}")
             finally:
                 self._queue.task_done()
 

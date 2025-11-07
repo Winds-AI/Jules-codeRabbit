@@ -136,7 +136,7 @@ async def receive_webhook(
     try:
         credentials = settings.require_code_review_credentials()
     except SettingsError as exc:  # pragma: no cover - guarded by config validation
-        logger.error("Webhook received but configuration is incomplete: %s", exc)
+        logger.error(f"Webhook received but configuration is incomplete: {exc}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
     raw_body = await request.body()
@@ -148,7 +148,7 @@ async def receive_webhook(
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        logger.warning("Webhook payload is not valid JSON: %s", exc)
+        logger.warning(f"Webhook payload is not valid JSON: {exc}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
 
     event = request.headers.get("X-GitHub-Event")
@@ -161,36 +161,33 @@ async def receive_webhook(
 
     now = time.time()
     if _is_duplicate(delivery_id, now):
-        logger.info("Duplicate delivery %s ignored.", delivery_id)
+        logger.info(f"Duplicate delivery {delivery_id} ignored.")
         return {"status": "ignored", "reason": "duplicate"}
 
     try:
         job_payload = _build_job_payload(event, payload)
     except IgnoreEventError as exc:
-        logger.debug("Webhook ignored: %s", exc)
+        logger.debug(f"Webhook ignored: {exc}")
         return {"status": "ignored", "reason": str(exc)}
     except ValueError as exc:
-        logger.warning("Webhook payload rejected: %s", exc)
+        logger.warning(f"Webhook payload rejected: {exc}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
         job = ReviewJob(delivery_id=delivery_id, event=event, payload=job_payload)
     except ValidationError as exc:  # pragma: no cover - defensive branch, shouldn't happen
-        logger.warning("Failed to construct review job: %s", exc)
+        logger.warning(f"Failed to construct review job: {exc}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job payload") from exc
 
     try:
         await enqueue_review_job(job)
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception("Failed to enqueue review job: %s", exc)
+        logger.exception(f"Failed to enqueue review job: {exc}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to enqueue job") from exc
 
     _mark_delivery(delivery_id, now)
     repo_full_name = getattr(job_payload, "repository", None)
-    logger.info(
-        "Enqueued %s event for %s",
-        event,
-        repo_full_name.full_name if repo_full_name else "unknown repository",
-    )
+    repo_name = repo_full_name.full_name if repo_full_name else "unknown repository"
+    logger.info(f"Enqueued {event} event for {repo_name}")
 
     return {"status": "accepted"}

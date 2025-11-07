@@ -27,7 +27,7 @@ class ReviewProcessor:
             settings = get_settings()
             credentials = settings.require_code_review_credentials()
         except SettingsError as exc:  # pragma: no cover - configuration guard
-            logger.error("Skipping job %s due to missing configuration: %s", job.delivery_id, exc)
+            logger.error(f"Skipping job {job.delivery_id} due to missing configuration: {exc}")
             return
 
         github_client = GitHubInstallationClient(
@@ -41,34 +41,28 @@ class ReviewProcessor:
                 context = await build_review_context(github_client, job)
             except GitHubAPIError as exc:
                 logger.error(
-                    "Failed to build review context for job %s: %s (status=%s)",
-                    job.delivery_id,
-                    exc,
-                    exc.status_code,
+                    f"Failed to build review context for job {job.delivery_id}: {exc} (status={exc.status_code})"
                 )
                 return
             except (ValueError, TypeError) as exc:
-                logger.error("Invalid job payload for %s: %s", job.delivery_id, exc)
+                logger.error(f"Invalid job payload for {job.delivery_id}: {exc}")
                 return
 
             logger.info(
-                "Prepared %s review context for %s (files=%d)",
-                job.event,
-                context.repository,
-                len(context.files),
+                f"Prepared {job.event} review context for {context.repository} (files={len(context.files)})"
             )
 
             jules_client = JulesClient(credentials.jules_api_key)
             try:
                 analysis = await jules_client.analyze(context)
             except JulesAPIError as exc:
-                logger.error("Jules analysis failed for %s: %s", context.repository, exc)
+                logger.error(f"Jules analysis failed for {context.repository}: {exc}")
                 return
             finally:
                 await jules_client.aclose()
 
             if not analysis.comments and not analysis.summary:
-                logger.info("No findings reported by Jules for %s", context.repository)
+                logger.info(f"No findings reported by Jules for {context.repository}")
                 return
 
             await self._publish_results(github_client, context, analysis)
@@ -87,9 +81,9 @@ class ReviewProcessor:
             elif isinstance(context, PushReviewContext):
                 await self._publish_push_review(github_client, context, analysis)
             else:  # pragma: no cover - defensive branch
-                logger.warning("Unsupported review context type: %s", type(context))
+                logger.warning(f"Unsupported review context type: {type(context)}")
         except GitHubAPIError as exc:
-            logger.error("Failed to post review comments to GitHub: %s", exc)
+            logger.error(f"Failed to post review comments to GitHub: {exc}")
 
     async def _publish_pull_request_review(
         self,
@@ -107,15 +101,12 @@ class ReviewProcessor:
 
         if not comments_payload and not summary_body:
             logger.info(
-                "Jules produced no actionable comments for PR #%s",
-                context.pull_number,
+                f"Jules produced no actionable comments for PR #{context.pull_number}"
             )
             return
 
         logger.info(
-            "Submitting review for PR #%s with %d inline comments.",
-            context.pull_number,
-            len(comments_payload),
+            f"Submitting review for PR #{context.pull_number} with {len(comments_payload)} inline comments."
         )
 
         await github_client.create_pull_request_review(
