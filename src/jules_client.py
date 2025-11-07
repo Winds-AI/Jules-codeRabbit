@@ -51,9 +51,16 @@ class JulesClient:
         session = await self._create_session(context, prompt, title=f"Code review for {context.repository}")
         session_id = session.get("name")
         if not session_id:
+            logger.error(f"Session creation response: {session}")
             raise JulesAPIError("Jules session did not return an identifier.")
 
-        await self._send_message(session_id, prompt)
+        logger.debug(f"Created session: {session_id}")
+
+        # When creating a session with a prompt, it starts processing immediately.
+        # The sendMessage endpoint is for additional messages after session creation.
+        # Since we already included the prompt in session creation, we skip sendMessage.
+        # If you need to send additional messages later, you can call sendMessage separately.
+
         raw_response = await self._poll_for_response(session_id)
         if not raw_response:
             logger.warning(f"Jules returned no analysis for {context.repository}")
@@ -90,16 +97,21 @@ class JulesClient:
         if github_repo_context:
             source_context["githubRepoContext"] = github_repo_context
 
+        request_body = {
+            "prompt": prompt,
+            "title": title,
+            "sourceContext": source_context,
+        }
+        logger.debug(f"Creating session with body: {json.dumps({**request_body, 'prompt': prompt[:100] + '...' if len(prompt) > 100 else prompt})}")
+        
         response = await self._client.post(
             "/sessions",
-            json={
-                "prompt": prompt,
-                "title": title,
-                "sourceContext": source_context,
-            },
+            json=request_body,
         )
         _raise_for_status("create session", response)
-        return response.json()
+        session_response = response.json()
+        logger.debug(f"Session creation response: {session_response}")
+        return session_response
 
     async def _send_message(self, session_id: str, prompt: str) -> None:
         response = await self._client.post(
