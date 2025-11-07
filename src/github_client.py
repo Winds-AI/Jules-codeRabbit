@@ -120,7 +120,8 @@ class GitHubInstallationClient:
         self._timeout = timeout
         self._user_agent = user_agent
         self._app_id = app_id
-        self._private_key = private_key_pem
+        # Normalize private key: handle escaped newlines from environment variables
+        self._private_key = private_key_pem.replace("\\n", "\n")
         self._client = client or httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
@@ -140,7 +141,14 @@ class GitHubInstallationClient:
             "exp": int((now + timedelta(minutes=10)).timestamp()),
             "iss": self._app_id,
         }
-        return jwt.encode(payload, self._private_key, algorithm="RS256")
+        try:
+            return jwt.encode(payload, self._private_key, algorithm="RS256")
+        except Exception as exc:
+            raise GitHubAPIError(
+                f"Failed to encode JWT: {exc}. Check that GITHUB_PRIVATE_KEY is a valid RSA private key in PEM format.",
+                0,
+                None,
+            ) from exc
 
     def _app_headers(self) -> Dict[str, str]:
         return {
@@ -152,7 +160,7 @@ class GitHubInstallationClient:
     @staticmethod
     def _installation_headers(token: str) -> Dict[str, str]:
         return {
-            "Authorization": f"token {token}",
+            "Authorization": f"Bearer {token}",
             "Accept": DEFAULT_ACCEPT_HEADER,
             "X-GitHub-Api-Version": DEFAULT_API_VERSION,
         }

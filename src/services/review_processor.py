@@ -37,7 +37,20 @@ class ReviewProcessor:
         )
 
         try:
-            context = await build_review_context(github_client, job)
+            try:
+                context = await build_review_context(github_client, job)
+            except GitHubAPIError as exc:
+                logger.error(
+                    "Failed to build review context for job %s: %s (status=%s)",
+                    job.delivery_id,
+                    exc,
+                    exc.status_code,
+                )
+                return
+            except (ValueError, TypeError) as exc:
+                logger.error("Invalid job payload for %s: %s", job.delivery_id, exc)
+                return
+
             logger.info(
                 "Prepared %s review context for %s (files=%d)",
                 job.event,

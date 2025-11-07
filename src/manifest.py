@@ -44,6 +44,7 @@ def build_manifest(settings: Settings) -> Dict[str, Any]:
         "redirect_url": register_url,
         "callback_urls": [f"{base_url}/callback"],
         "public": settings.manifest_public,
+        "repository_selection": "all",
         "default_permissions": DEFAULT_PERMISSIONS.copy(),
         "default_events": DEFAULT_EVENTS.copy(),
         "setup_url": f"{base_url}/setup",

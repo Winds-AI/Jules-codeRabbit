@@ -15,9 +15,14 @@ logger = get_logger()
 def _serialize_files(files: List[dict]) -> List[FilePatch]:
     serialized: List[FilePatch] = []
     for file in files:
+        # GitHub API may return "filename" or "path" depending on endpoint
+        path = file.get("filename") or file.get("path")
+        if not path:
+            logger.warning("Skipping file entry missing filename/path: %s", file)
+            continue
         serialized.append(
             FilePatch(
-                path=file.get("filename"),
+                path=path,
                 status=file.get("status", ""),
                 additions=int(file.get("additions", 0) or 0),
                 deletions=int(file.get("deletions", 0) or 0),
